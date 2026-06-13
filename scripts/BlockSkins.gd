@@ -120,7 +120,7 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		17: _gold(ci, r, col, s, rad, seed_v, pr)
 		18: _slime(ci, r, col, s, rad, seed_v)
 		19: _disco(ci, r, col, s, rad, seed_v)
-		20: _aurora(ci, r, col, s, rad, seed_v)
+		20: _aurora(ci, r, col, s, rad, seed_v, pr)
 		21: _plasma(ci, r, col, s, rad, seed_v)
 		22: _marble(ci, r, col, s, rad, seed_v, pr)
 		23: _matrix(ci, r, col, s, rad, seed_v)
@@ -1078,38 +1078,59 @@ static func _galaxy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 	ci.draw_circle(hp, s * 0.036, Color(1, 1, 1, ha))
 	rr_outline(ci, r, rad, g.lightened(0.25), 1.5)
 
-# ── 20 AURORA (animated: night sky with flowing light curtains) ───────────────
-# Deep night-sky block with twinkling stars and a few rippling aurora ribbons;
-# the curtain hues are seeded off the piece colour so blocks stay tellable apart.
-static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+# ── 20 AURORA (animated: ONE continuous wavy curtain across the whole board) ─
+# Night sky with twinkling stars. The aurora is a set of horizontal light bands
+# living in pr (pattern) space — each band's centreline ripples on two sine
+# harmonics of the ABSOLUTE x, so the curtains wave all over and flow unbroken
+# from block to block. Each band is drawn as clipped halo→core ribbons.
+static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
 	var t := Time.get_ticks_msec() * 0.001
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
 	rr_grad(ci, r, rad, Color(0.04, 0.06, 0.18), Color(0.02, 0.10, 0.16))
-	# Twinkling stars
+	# Twinkling stars (per block — just points, no need to be continuous)
 	for i in 4:
 		var hsh := seed_v * 41 + i * 97
 		var stx : float = r.position.x + s * (0.12 + float(hsh % 76) / 100.0)
 		var sty : float = r.position.y + s * (0.08 + float((hsh / 7) % 46) / 100.0)
 		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(hsh)))
 		ci.draw_circle(Vector2(stx, sty), s * 0.013, Color(1, 1, 1, 0.5 * tw))
-	# Aurora curtains — rippling horizontal ribbons, hue seeded off the piece
-	var n := 8
-	for band in 3:
-		var hue : float = fmod(0.30 + col.h * 0.40 + float(band) * 0.10 + 0.04 * sin(t * 0.3 + float(seed_v)), 1.0)
+	# Continuous aurora curtains
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var band_spacing := ps * 1.4
+	var nx := 6
+	var passes := [[0.55, 0.10, 0.0], [0.30, 0.15, 0.0], [0.10, 0.34, 0.35]]   # [thick, alpha, lighten]
+	var b0 := int(floor((pr.position.y - band_spacing * 1.5) / band_spacing))
+	var b1 := int(ceil((pr.end.y + band_spacing * 1.5) / band_spacing))
+	for band in range(b0, b1 + 1):
+		var by : float = float(band) * band_spacing
+		var bphase : float = float(absi(band * 2654435) % 1000) / 1000.0 * TAU
+		var hue : float = fmod(0.30 + col.h * 0.35 + float(band) * 0.13 + 0.05 * sin(t * 0.3 + bphase), 1.0)
 		var ac := Color.from_hsv(hue, 0.62, 1.0)
-		var by0 : float = r.position.y + r.size.y * (0.30 + 0.16 * float(band))
-		var top := PackedVector2Array()
-		for i in n + 1:
-			var fx : float = float(i) / float(n)
-			var x : float = r.position.x + fx * r.size.x
-			var y : float = by0 + sin(t * 1.1 + float(seed_v) * 0.6 + fx * 5.0 + float(band) * 1.3) * s * 0.09
-			top.append(Vector2(x, y))
-		var ribbon := top.duplicate()
-		for i in range(n, -1, -1):
-			ribbon.append(Vector2(top[i].x, top[i].y + s * (0.12 + 0.04 * float(band))))
-		ribbon = clip_poly_to_rect(ribbon, r)
-		draw_poly_safe(ci, ribbon, Color(ac.r, ac.g, ac.b, 0.22))
-		ci.draw_polyline(top, Color(ac.lightened(0.30).r, ac.lightened(0.30).g, ac.lightened(0.30).b, 0.5), 1.5)
+		# Centreline y for a given absolute x — two harmonics so it ripples all over
+		var cx0 := pr.position.x
+		var cx1 := pr.end.x
+		var ys := PackedFloat32Array()
+		var xs := PackedFloat32Array()
+		for k in nx + 1:
+			var px : float = lerpf(cx0, cx1, float(k) / float(nx))
+			xs.append(px)
+			ys.append(by + sin(px * (2.4 / ps) + t * 0.5 + bphase) * ps * 0.45
+				+ sin(px * (5.1 / ps) - t * 0.35 + bphase * 1.7) * ps * 0.20)
+		for p : Array in passes:
+			var thick : float = ps * float(p[0]) * (0.8 + 0.4 * sin(bphase))
+			var pc := ac.lerp(Color(1, 1, 1, 1), float(p[2]))
+			var top := PackedVector2Array()
+			var bot := PackedVector2Array()
+			for k in nx + 1:
+				top.append(Vector2(xs[k], ys[k] - thick * 0.5) + delta)
+				bot.append(Vector2(xs[k], ys[k] + thick * 0.5) + delta)
+			var poly := top.duplicate()
+			for k in range(bot.size() - 1, -1, -1):
+				poly.append(bot[k])
+			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])))
 	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
 
 # ── 21 PLASMA (animated: electric energy ball) ───────────────────────────────
