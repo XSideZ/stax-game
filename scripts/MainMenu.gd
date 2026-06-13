@@ -177,19 +177,6 @@ func _build_logo() -> void:
 		if i == letters.size() - 1 and text.length() - 1 == i:
 			t.tween_callback(func(): bobbing = true)
 
-	var tagline := Label.new()
-	tagline.text = "STACK  ·  CLEAR  ·  REPEAT"
-	tagline.add_theme_font_size_override("font_size", 17)
-	tagline.add_theme_color_override("font_color", Color(0.55, 0.80, 0.95, 0.85))
-	tagline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tagline.size = Vector2(300, 26)
-	tagline.position = Vector2(57, 268)
-	tagline.modulate.a = 0.0
-	ui.add_child(tagline)
-	var tt := create_tween()
-	tt.tween_interval(1.0)
-	tt.tween_property(tagline, "modulate:a", 1.0, 0.6)
-
 	# Best score lives in the profile card now (folded out of the waterfall)
 
 # ── Secret cat easter egg: tap the letters S-T-A-X in order ──────────────────
@@ -199,6 +186,8 @@ func _on_letter_tapped(idx: int) -> void:
 	var hop := create_tween()
 	hop.tween_property(lbl, "scale", Vector2(1.3, 1.3), 0.10).set_trans(Tween.TRANS_BACK)
 	hop.tween_property(lbl, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_BACK)
+	if GameState.haptics_on:
+		Input.vibrate_handheld(15)
 	if idx == cat_progress:
 		cat_progress += 1
 		Sfx.play_tick()
