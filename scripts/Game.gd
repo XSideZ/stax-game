@@ -755,22 +755,68 @@ func _advance_theme() -> void:
 	_show_theme_popup(THEMES[theme_idx]["name"])
 
 func _show_theme_popup(theme_name: String) -> void:
+	var accent : Color = THEMES[theme_idx]["accent"]
+	var cy := 360.0   # over the board centre — a real "you've arrived" moment
+
+	# Whole reveal lives under one Control so it pops + fades as a single unit
+	var root := Control.new()
+	root.position = Vector2.ZERO
+	root.size = Vector2(414, 896)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE   # never blocks placing pieces
+	ui.add_child(root)
+
+	# Banner band + accent edge lines
+	var band := ColorRect.new()
+	band.color = Color(0.05, 0.04, 0.10, 0.55)
+	band.position = Vector2(0, cy - 66)
+	band.size = Vector2(414, 132)
+	band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(band)
+	for ey : float in [cy - 66.0, cy + 63.0]:
+		var line := ColorRect.new()
+		line.color = Color(accent.r, accent.g, accent.b, 0.9)
+		line.position = Vector2(0, ey)
+		line.size = Vector2(414, 3)
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(line)
+
+	# "ENTERING" eyebrow
+	var eyebrow := Label.new()
+	eyebrow.text = "ENTERING"
+	eyebrow.add_theme_font_size_override("font_size", 17)
+	eyebrow.add_theme_color_override("font_color", Color(accent.r, accent.g, accent.b, 0.85))
+	eyebrow.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.8))
+	eyebrow.add_theme_constant_override("outline_size", 4)
+	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	eyebrow.position = Vector2(0, cy - 52)
+	eyebrow.size = Vector2(414, 22)
+	eyebrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(eyebrow)
+
+	# Area name — big and bold
 	var lbl := Label.new()
 	lbl.text = theme_name
-	lbl.add_theme_font_size_override("font_size", 26)
-	lbl.add_theme_color_override("font_color", THEMES[theme_idx]["accent"])
-	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
-	lbl.add_theme_constant_override("outline_size", 6)
+	lbl.add_theme_font_size_override("font_size", 44)
+	lbl.add_theme_color_override("font_color", accent)
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.9))
+	lbl.add_theme_constant_override("outline_size", 7)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.size       = Vector2(300, 48)
-	lbl.position   = Vector2(57, 460)
-	lbl.modulate.a = 0.0
-	ui.add_child(lbl)
+	lbl.position = Vector2(0, cy - 28)
+	lbl.size = Vector2(414, 58)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(lbl)
+
+	# Pop in (scale + fade), hold, then drift out
+	root.pivot_offset = Vector2(207, cy)
+	root.modulate.a = 0.0
+	root.scale = Vector2(0.80, 0.80)
 	var t := create_tween()
-	t.tween_property(lbl, "modulate:a", 1.0, 0.18)
-	t.tween_interval(0.9)
-	t.tween_property(lbl, "modulate:a", 0.0, 0.40)
-	t.tween_callback(lbl.queue_free)
+	t.tween_property(root, "modulate:a", 1.0, 0.28)
+	t.parallel().tween_property(root, "scale", Vector2.ONE, 0.42).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_interval(1.2)
+	t.tween_property(root, "modulate:a", 0.0, 0.5)
+	t.parallel().tween_property(root, "scale", Vector2(1.10, 1.10), 0.5)
+	t.chain().tween_callback(root.queue_free)
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 func _draw() -> void:
