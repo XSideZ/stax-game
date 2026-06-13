@@ -11,7 +11,7 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25]
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]
 
 # 4x4 ordered-dither (Bayer) matrix — the classic limited-palette gradient trick
 const BAYER4 : Array = [
@@ -125,7 +125,12 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		22: _marble(ci, r, col, s, rad, seed_v, pr)
 		23: _matrix(ci, r, col, s, rad, seed_v)
 		24: _hologram(ci, r, col, s, rad, seed_v)
-		25: _cat(ci, r, col, s, rad, seed_v)
+		25: _prism(ci, r, col, s, rad, seed_v, pr)
+		26: _stained(ci, r, col, s, rad, seed_v)
+		27: _synthwave(ci, r, col, s, rad, seed_v, pr)
+		28: _autumn(ci, r, col, s, rad, seed_v, pr)
+		29: _warp(ci, r, col, s, rad, seed_v, pr)
+		30: _cat(ci, r, col, s, rad, seed_v)
 	if with_overlay and OVERLAY_STYLES.has(style):
 		paint_overlay(ci, style, r, col, seed_v)
 
@@ -1288,3 +1293,202 @@ static func _hologram(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float
 		Vector2(gx + gw - s * 0.30, r.end.y), Vector2(gx - s * 0.30, r.end.y)]), r)
 	draw_poly_safe(ci, glint, Color(1, 1, 1, 0.16))
 	rr_outline(ci, r, rad, top.lightened(0.30), 1.6)
+
+# ── 25 PRISM (animated: clear glass refracting a rainbow that flows the board) ─
+# The spectrum hue is a function of CANVAS position + time, so one continuous
+# rainbow sweeps diagonally across every block. A caustic gleam travels too.
+static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	var t := Time.get_ticks_msec() * 0.001
+	var ctr := pr.get_center()
+	var hue : float = fmod((ctr.x + ctr.y) / (ps * 7.0) + t * 0.07, 1.0)
+	if hue < 0.0:
+		hue += 1.0
+	var spec := Color.from_hsv(hue, 0.80, 1.0)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
+	var base := col.lerp(spec, 0.60)
+	rr_grad(ci, r, rad, base.lightened(0.40), base.darkened(0.08))
+	# Lower-half refracted secondary hue (light splitting)
+	var spec2 := Color.from_hsv(fmod(hue + 0.5, 1.0), 0.70, 1.0)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.07, r.size.y * 0.56), Vector2(r.size.x - s * 0.14, r.size.y * 0.40)),
+		rad * 0.5, Color(spec2.r, spec2.g, spec2.b, 0.18))
+	# Moving caustic gleam — absolute-canvas diagonal strip, continuous + clipped
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var phase := fmod(t * 200.0, 760.0)
+	var dmin := pr.position.x + 0.5 * pr.position.y - ps * 0.5
+	var dmax := pr.end.x + 0.5 * pr.end.y
+	var m := floorf((dmin - phase) / 760.0) + 1.0
+	var S := phase + m * 760.0
+	if S <= dmax:
+		var y_top := pr.position.y - 4.0
+		var y_bot := pr.end.y + 4.0
+		var bw := ps * 0.22
+		draw_poly_safe(ci, clip_poly_to_rect(PackedVector2Array([
+			Vector2(S - 0.5 * y_top, y_top) + delta,
+			Vector2(S + bw - 0.5 * y_top, y_top) + delta,
+			Vector2(S + bw - 0.5 * y_bot, y_bot) + delta,
+			Vector2(S - 0.5 * y_bot, y_bot) + delta]), r), Color(1, 1, 1, 0.35))
+	# Crisp glass facet (top-left bright triangle) + sparkle
+	draw_poly_safe(ci, PackedVector2Array([
+		r.position + Vector2(s * 0.12, s * 0.12),
+		r.position + Vector2(s * 0.52, s * 0.14),
+		r.position + Vector2(s * 0.16, s * 0.52)]), Color(1, 1, 1, 0.16))
+	ci.draw_circle(r.position + r.size * Vector2(0.72, 0.30), s * 0.03, Color(1, 1, 1, 0.75))
+	rr_outline(ci, r, rad, Color(1, 1, 1, 0.45), 1.5)
+
+# ── 26 STAINED (animated: leaded jewel-glass mosaic with drifting sunlight) ───
+static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
+	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came
+	var inner := r.grow(-s * 0.075)
+	var h := absi(seed_v)
+	var segs : Array = []
+	match h % 3:
+		0:
+			var hw := inner.size.x * 0.5
+			var hh := inner.size.y * 0.5
+			segs = [Rect2(inner.position, Vector2(hw, hh)),
+				Rect2(inner.position + Vector2(hw, 0), Vector2(hw, hh)),
+				Rect2(inner.position + Vector2(0, hh), Vector2(hw, hh)),
+				Rect2(inner.position + Vector2(hw, hh), Vector2(hw, hh))]
+		1:
+			var bh := inner.size.y / 3.0
+			segs = [Rect2(inner.position, Vector2(inner.size.x, bh)),
+				Rect2(inner.position + Vector2(0, bh), Vector2(inner.size.x, bh)),
+				Rect2(inner.position + Vector2(0, bh * 2.0), Vector2(inner.size.x, bh))]
+		_:
+			var bw := inner.size.x / 3.0
+			segs = [Rect2(inner.position, Vector2(bw, inner.size.y)),
+				Rect2(inner.position + Vector2(bw, 0), Vector2(bw, inner.size.y)),
+				Rect2(inner.position + Vector2(bw * 2.0, 0), Vector2(bw, inner.size.y))]
+	for i in segs.size():
+		var seg : Rect2 = segs[i]
+		var g := seg.grow(-s * 0.016)
+		if g.size.x < 3.0 or g.size.y < 3.0:
+			continue
+		var jhue : float = fmod(col.h + float(i) * 0.07 + float(h % 5) * 0.02, 1.0)
+		var jewel := Color.from_hsv(jhue, 0.85, 0.95)
+		rr_grad(ci, g, rad * 0.35, jewel.lightened(0.22), jewel.darkened(0.18))
+		ci.draw_circle(g.position + g.size * Vector2(0.3, 0.28), minf(g.size.x, g.size.y) * 0.14, Color(1, 1, 1, 0.20))
+	# Drifting sunlight bloom catching the glass
+	var bx : float = r.position.x + r.size.x * (0.25 + 0.5 * (sin(t * 0.4 + float(seed_v)) * 0.5 + 0.5))
+	ci.draw_circle(Vector2(bx, r.position.y + r.size.y * 0.42), s * 0.26, Color(1.0, 0.97, 0.85, 0.10))
+	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
+
+# ── 27 SYNTHWAVE (animated: 80s sunset gradient + continuous neon grid + scan) ─
+static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	var t := Time.get_ticks_msec() * 0.001
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
+	var top := col.lerp(Color(1.0, 0.16, 0.60), 0.62)   # hot magenta
+	var bot := col.lerp(Color(0.18, 0.62, 1.0), 0.55)   # cyan
+	rr_grad(ci, r, rad, top, bot)
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var pulse := 0.7 + 0.3 * sin(t * 2.0)
+	var grid_col := Color(0.45, 1.0, 0.95, 0.22 + 0.12 * pulse)
+	var gs := ps * 0.5
+	for vi in range(int(floor(pr.position.x / gs)), int(ceil(pr.end.x / gs)) + 1):
+		var x := float(vi) * gs + delta.x
+		ci.draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), grid_col, 1.2)
+	for hi in range(int(floor(pr.position.y / gs)), int(ceil(pr.end.y / gs)) + 1):
+		var y := float(hi) * gs + delta.y
+		ci.draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), grid_col, 1.2)
+	# Bright scan sweep travelling down the whole board (continuous)
+	var period := ps * 9.0
+	var ys := fmod(t * ps * 1.2, period)
+	var ky := int(floor((pr.position.y - ys) / period))
+	for kk in range(ky, ky + 2):
+		var yy := ys + float(kk) * period + delta.y
+		if yy >= r.position.y - 2.0 and yy <= r.end.y + 2.0:
+			ci.draw_line(Vector2(r.position.x, yy), Vector2(r.end.x, yy), Color(1.0, 0.9, 0.6, 0.6), 2.5)
+	rr_outline(ci, r, rad, Color(1.0, 0.4, 0.8, 0.6), 1.6)
+
+# ── 28 AUTUMN (animated: warm wood with a continuous fall of tumbling leaves) ─
+static func _autumn(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	var t := Time.get_ticks_msec() * 0.001
+	var base := col.lerp(Color(0.55, 0.32, 0.14), 0.62)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.28))
+	rr_grad(ci, r, rad, base.lightened(0.28), base.darkened(0.14))
+	var leaf_cols : Array = [Color(0.85, 0.22, 0.10), Color(0.95, 0.48, 0.10),
+		Color(0.93, 0.74, 0.20), Color(0.70, 0.34, 0.12)]
+	var margin := ps * 0.08
+	var spacing := ps * 0.40
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var lane0 := int(floor((pr.position.x - margin) / spacing))
+	var lane_count := int(ceil((pr.size.x + margin * 2.0) / spacing)) + 1
+	for li in lane_count:
+		var lane := lane0 + li
+		var lx := float(lane) * spacing + spacing * 0.5
+		if lx < pr.position.x - margin or lx > pr.end.x + margin:
+			continue
+		var lseed := absi(lane * 7919)
+		var speed := ps * (0.30 + float(lseed % 5) * 0.06)
+		var period := ps * (1.1 + float(lseed % 3) * 0.5)
+		var base_y := fmod(t * speed + float(lseed % 100) * 3.7, period)
+		var k0 := int(floor((pr.position.y - margin - base_y) / period))
+		for k in range(k0, k0 + int(ceil((pr.size.y + margin * 2.0) / period)) + 2):
+			var py := base_y + float(k) * period
+			if py < pr.position.y - margin or py > pr.end.y + margin:
+				continue
+			var sway := sin(t * 1.4 + float(lane) * 1.3 + float(k) * 0.6) * ps * 0.07
+			var p := Vector2(lx + sway, py) + delta
+			var ang := t * 2.2 + float(lane * 3 + k) * 1.1
+			var lc : Color = leaf_cols[absi(lane * 3 + k) % leaf_cols.size()]
+			_leaf(ci, p, ang, ps * 0.075, lc, r)
+	rr_outline(ci, r, rad, base.darkened(0.30), 1.5)
+
+# A simple pointed leaf with a centre vein, manually rotated + clipped per block
+static func _leaf(ci: CanvasItem, p: Vector2, ang: float, size_f: float, col: Color, clip: Rect2) -> void:
+	var ca := cos(ang)
+	var sa := sin(ang)
+	var shape := [Vector2(0.0, -0.95), Vector2(0.42, -0.30), Vector2(0.30, 0.42),
+		Vector2(0.0, 0.85), Vector2(-0.30, 0.42), Vector2(-0.42, -0.30)]
+	var pts := PackedVector2Array()
+	for v in shape:
+		var sv : Vector2 = v * size_f
+		pts.append(p + Vector2(sv.x * ca - sv.y * sa, sv.x * sa + sv.y * ca))
+	draw_poly_safe(ci, clip_poly_to_rect(pts, clip), col)
+	if clip.has_point(p):
+		var tip := p + Vector2((-(-0.95) * sa), ((-0.95) * ca)) * size_f
+		var basep := p + Vector2((-(0.85) * sa), ((0.85) * ca)) * size_f
+		ci.draw_line(basep, tip, Color(col.darkened(0.35).r, col.darkened(0.35).g, col.darkened(0.35).b, 0.6), 1.0)
+
+# ── 29 WARP (animated: hyperspace — stars streak radially from the board centre)
+static func _warp(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	var t := Time.get_ticks_msec() * 0.001
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
+	var deep := col.lerp(Color(0.03, 0.04, 0.13), 0.82)
+	rr_grad(ci, r, rad, deep.lightened(0.06), deep.darkened(0.12))
+	var bc := Vector2(184.0, 184.0)   # board centre (grid-local) = warp vanishing point
+	var radial := pr.get_center() - bc
+	var dist := radial.length()
+	var dir := radial.normalized() if dist > 1.0 else Vector2(0.0, -1.0)
+	var perp := dir.orthogonal()
+	var streak_len := ps * (0.30 + clampf(dist / (ps * 6.0), 0.0, 1.0))
+	var ctr := r.get_center()
+	var h := absi(seed_v * 2654435 + 1)
+	for i in 5:
+		var ph : float = fmod(t * (0.45 + float(i % 3) * 0.22) + float((h >> i) % 97) * 0.06, 1.0)
+		var perp_off : float = (float((h >> (i + 5)) % 100) / 100.0 - 0.5) * ps * 0.75
+		var travel : float = (ph - 0.5) * ps * 1.0
+		var sp := ctr + dir * travel + perp * perp_off
+		var tail := sp - dir * (streak_len * (0.3 + ph * 0.7))
+		var bright := 1.0 - absf(ph - 0.55) * 1.7
+		if bright > 0.0:
+			ci.draw_line(tail, sp, Color(0.70, 0.85, 1.0, bright * 0.75), 1.0 + ph * 1.8)
+			ci.draw_circle(sp, 1.0 + ph * 1.6, Color(1, 1, 1, bright))
+	for j in 2:
+		var sx : float = r.position.x + s * (0.2 + float((absi(seed_v) * 13 + j * 41) % 60) / 100.0)
+		var sy : float = r.position.y + s * (0.2 + float((absi(seed_v) * 7 + j * 53) % 60) / 100.0)
+		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(j + seed_v)))
+		ci.draw_circle(Vector2(sx, sy), s * 0.012, Color(1, 1, 1, 0.5 * tw))
+	rr_outline(ci, r, rad, Color(0.4, 0.5, 0.8, 0.4), 1.5)

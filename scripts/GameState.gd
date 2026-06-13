@@ -22,7 +22,7 @@ var theme_bag : Array = []
 # ── Secret cat skin (easter egg: tap S-T-A-X on the title in order) ───────────
 # CAT is the last THEMES entry; the random theme rotation only uses 0..CAT_SKIN-1
 # so it never appears by chance. cat_mode forces it on everywhere, and persists.
-const CAT_SKIN := 25
+const CAT_SKIN := 30
 var cat_mode : bool = false
 
 # Effective skin index, honoured by Game/MainMenu/GameOver
@@ -266,7 +266,12 @@ const THEMES: Array = [
 	{"bg": Color(0.26, 0.24, 0.30), "orb": Color(1.00, 1.00, 1.00, 0.06), "accent": Color(0.92, 0.90, 0.96), "name": "MARBLE HALL"},
 	{"bg": Color(0.02, 0.08, 0.04), "orb": Color(0.20, 1.00, 0.40, 0.07), "accent": Color(0.40, 1.00, 0.50), "name": "DATA STREAM"},
 	{"bg": Color(0.06, 0.07, 0.14), "orb": Color(0.40, 0.90, 1.00, 0.08), "accent": Color(0.60, 0.90, 1.00), "name": "HOLO DECK"},
-	# index 25 = secret CAT skin (never in random rotation; easter-egg only)
+	{"bg": Color(0.10, 0.10, 0.16), "orb": Color(1.00, 1.00, 1.00, 0.07), "accent": Color(0.80, 0.95, 1.00), "name": "PRISM"},
+	{"bg": Color(0.07, 0.06, 0.11), "orb": Color(0.80, 0.45, 1.00, 0.08), "accent": Color(0.95, 0.70, 1.00), "name": "CATHEDRAL"},
+	{"bg": Color(0.10, 0.04, 0.16), "orb": Color(1.00, 0.30, 0.80, 0.08), "accent": Color(1.00, 0.45, 0.85), "name": "OUTRUN"},
+	{"bg": Color(0.16, 0.09, 0.04), "orb": Color(1.00, 0.55, 0.15, 0.08), "accent": Color(1.00, 0.65, 0.25), "name": "HARVEST"},
+	{"bg": Color(0.02, 0.03, 0.09), "orb": Color(0.55, 0.70, 1.00, 0.08), "accent": Color(0.70, 0.85, 1.00), "name": "HYPERSPACE"},
+	# index 30 = secret CAT skin (never in random rotation; easter-egg only)
 	{"bg": Color(0.20, 0.14, 0.24), "orb": Color(1.00, 0.80, 0.90, 0.09), "accent": Color(1.00, 0.78, 0.88), "name": "MEOW TOWN"},
 ]
 

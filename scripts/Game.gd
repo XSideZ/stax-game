@@ -1497,7 +1497,54 @@ func _draw_bg_pattern() -> void:
 				draw_rect(Rect2(wx - sz + 9.0, wy - sz - 9.0, sz * 2.0, sz * 2.0), wc, false, 1.5)
 				draw_line(Vector2(wx - sz, wy - sz), Vector2(wx - sz + 9.0, wy - sz - 9.0), wc, 1.0)
 				draw_line(Vector2(wx + sz, wy + sz), Vector2(wx + sz + 9.0, wy + sz - 9.0), wc, 1.0)
-		25:  # Meow Town — drifting paw prints, floating yarn + fish
+		25:  # Prism — soft drifting rainbow light bands
+			var prt := Time.get_ticks_msec() * 0.001
+			for i in 5:
+				var hue : float = fmod(0.12 * float(i) + prt * 0.05, 1.0)
+				var pc := Color.from_hsv(hue, 0.6, 1.0, 0.05)
+				var by : float = fmod(float(i) * 200.0 + prt * 18.0, 1000.0) - 60.0
+				draw_rect(Rect2(0, by, 414, 70), pc, true)
+		26:  # Cathedral — soft coloured light shafts from above
+			var cat_t := Time.get_ticks_msec() * 0.001
+			for i in 5:
+				var lx : float = 40.0 + float(i) * 84.0
+				var hue : float = fmod(0.16 * float(i) + 0.4, 1.0)
+				var sc := Color.from_hsv(hue, 0.55, 1.0, 0.05 + 0.02 * sin(cat_t * 0.5 + float(i)))
+				draw_polygon(PackedVector2Array([
+					Vector2(lx, 0), Vector2(lx + 60.0, 0),
+					Vector2(lx + 130.0, 896.0), Vector2(lx + 10.0, 896.0)]),
+					PackedColorArray([sc]))
+		27:  # Outrun — neon perspective grid + sun
+			var ot := Time.get_ticks_msec() * 0.001
+			var horizon := 470.0
+			draw_circle(Vector2(207, horizon - 40.0), 110.0, Color(1.0, 0.35, 0.55, 0.07))
+			var ng := Color(0.45, 1.0, 0.95, 0.06)
+			for i in 9:
+				var gx : float = float(i) / 8.0 * 414.0
+				draw_line(Vector2(gx, horizon), Vector2((gx - 207.0) * 3.0 + 207.0, 896.0), ng, 1.5)
+			for i in 7:
+				var f : float = fmod(float(i) / 7.0 + ot * 0.12, 1.0)
+				var gy : float = horizon + f * f * (896.0 - horizon)
+				draw_line(Vector2(0, gy), Vector2(414, gy), ng, 1.5)
+		28:  # Harvest — drifting autumn leaves
+			var at2 := Time.get_ticks_msec() * 0.001
+			var lcs : Array = [Color(0.85, 0.28, 0.12, 0.10), Color(0.95, 0.55, 0.15, 0.10), Color(0.92, 0.76, 0.25, 0.10)]
+			for i in 14:
+				var lx2 : float = fmod(float(i * 137 + 30) * 11.0 + sin(at2 * 0.5 + float(i)) * 30.0, 414.0)
+				var ly : float = fmod(float(i * 83 + 12) * 19.0 + at2 * (28.0 + float(i % 4) * 8.0), 960.0) - 30.0
+				draw_circle(Vector2(lx2, ly), 5.0 + float(i % 3) * 2.0, lcs[i % lcs.size()])
+		29:  # Hyperspace — stars streaking from the centre
+			var wt := Time.get_ticks_msec() * 0.001
+			var wc := Vector2(207, 430)
+			for i in 26:
+				var ang : float = float(i) / 26.0 * TAU + float(i % 5) * 0.1
+				var dirv := Vector2(cos(ang), sin(ang))
+				var ph : float = fmod(wt * 0.5 + float(i) * 0.07, 1.0)
+				var d0 : float = ph * 520.0
+				var sp := wc + dirv * d0
+				var tail := wc + dirv * maxf(d0 - 40.0 - ph * 90.0, 0.0)
+				draw_line(tail, sp, Color(0.7, 0.85, 1.0, ph * 0.18), 1.0 + ph * 1.5)
+		30:  # Meow Town — drifting paw prints, floating yarn + fish
 			var mt3 := Time.get_ticks_msec() * 0.001
 			var paw := Color(1.0, 0.80, 0.88, 0.07)
 			for i in 9:
