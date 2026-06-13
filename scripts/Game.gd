@@ -1258,13 +1258,12 @@ func _draw_slot(i: int) -> void:
 	_rr_fill(rect, 16.0, bg)
 	_rr_outline(rect, 16.0, Color(1, 1, 1, 0.07), 1.5)
 
-	if placed[i]:
+	# Leave the source slot empty while dragging — no faint silhouette behind it
+	if placed[i] or dragging_slot == i:
 		return
 
 	var shape : Array = pieces[i].shape
 	var color : Color = pieces[i].color
-	if dragging_slot == i:
-		color = Color(color.r, color.g, color.b, 0.25)
 
 	var min_c := 99; var max_c := 0
 	var min_r := 99; var max_r := 0
@@ -1288,11 +1287,8 @@ func _draw_slot(i: int) -> void:
 	for cell in shape:
 		var rx : float = ox + cell[0] * tstep
 		var ry : float = oy + cell[1] * tstep
-		if dragging_slot == i:
-			draw_rect(Rect2(rx, ry, tcell, tcell), color, true)
-		else:
-			_draw_styled_block(Rect2(rx, ry, tcell, tcell), color,
-				pieces[i].get("pattern", 0) + cell[0] * 7 + cell[1] * 13)
+		_draw_styled_block(Rect2(rx, ry, tcell, tcell), color,
+			pieces[i].get("pattern", 0) + cell[0] * 7 + cell[1] * 13)
 
 # Draws on drag_layer (above the grid) — the piece floats DRAG_LIFT px above
 # the finger so it's never hidden under the player's hand
