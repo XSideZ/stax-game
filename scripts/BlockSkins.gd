@@ -152,6 +152,17 @@ static func clip_poly_to_rect(pts: PackedVector2Array, r: Rect2) -> PackedVector
 				out.append(_isect_edge(a, b, r, edge))
 	return out
 
+# draw_polygon triangulates internally and errors ("triangulation failed") on
+# degenerate input: zero-area slivers, duplicate/collinear points, or a self-
+# intersecting outline. Clipped patterns hit all three at block edges. Pre-check
+# with the same ear-clipping triangulator and silently skip if it can't be drawn.
+static func draw_poly_safe(ci: CanvasItem, pts: PackedVector2Array, col: Color) -> void:
+	if pts.size() < 3:
+		return
+	if Geometry2D.triangulate_polygon(pts).is_empty():
+		return
+	ci.draw_polygon(pts, PackedColorArray([col]))
+
 static func _inside_edge(p: Vector2, r: Rect2, e: int) -> bool:
 	match e:
 		0: return p.x >= r.position.x
@@ -381,8 +392,7 @@ static func _candy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _
 		var poly := clip_poly_to_rect(PackedVector2Array([
 			Vector2(d - y0, y0), Vector2(d + sw - y0, y0),
 			Vector2(d + sw - y1, y1), Vector2(d - y1, y1)]), inner)
-		if poly.size() >= 3:
-			ci.draw_polygon(poly, PackedColorArray([stripe]))
+		draw_poly_safe(ci, poly, stripe)
 		lo += sw * 2.0
 	# Glossy shine across the top + a little sparkle
 	var gloss := Rect2(r.position + Vector2(r.size.x * 0.12, r.size.y * 0.09),
@@ -492,8 +502,7 @@ static func _water(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	for i in range(n, -1, -1):
 		ribbon.append(Vector2(top[i].x, top[i].y + s * 0.08))
 	ribbon = clip_poly_to_rect(ribbon, r)
-	if ribbon.size() >= 3:
-		ci.draw_polygon(ribbon, PackedColorArray([Color(1, 1, 1, 0.20)]))
+	draw_poly_safe(ci, ribbon, Color(1, 1, 1, 0.20))
 	ci.draw_polyline(top, Color(1, 1, 1, 0.55), 1.5)
 	# Rising bubbles — sway as they climb, shrink and fade near the surface
 	for i in 3:
@@ -643,8 +652,7 @@ static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _
 				if not inner.has_point(pt):
 					fully_inside = false
 			var cell := clip_poly_to_rect(hex, inner)
-			if cell.size() >= 3:
-				ci.draw_polygon(cell, PackedColorArray([hn.darkened(0.22 + float(hh % 5) * 0.05)]))
+			draw_poly_safe(ci, cell, hn.darkened(0.22 + float(hh % 5) * 0.05))
 			# Wax-capped cells (only when the whole hex fits inside the block)
 			if fully_inside and hh % 3 == 0:
 				ci.draw_circle(hc, hs * 0.58, hn.lightened(0.22))
@@ -856,8 +864,7 @@ static func _petal(ci: CanvasItem, p: Vector2, ang: float, size_f: float, col: C
 		var sv : Vector2 = v * size_f
 		pts.append(p + Vector2(sv.x * ca - sv.y * sa, sv.x * sa + sv.y * ca))
 	var clipped := clip_poly_to_rect(pts, clip)
-	if clipped.size() >= 3:
-		ci.draw_polygon(clipped, PackedColorArray([col]))
+	draw_poly_safe(ci, clipped, col)
 	# Soft highlight toward the base — only when it sits fully inside
 	var hp := p + Vector2(-0.45 * sa, 0.45 * ca) * size_f
 	if clip.grow(-size_f * 0.25).has_point(hp):
@@ -912,8 +919,7 @@ static func _gold(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _s
 				Vector2(b0 + bw - 0.4 * y_top, y_top) + delta,
 				Vector2(b0 + bw - 0.4 * y_bot, y_bot) + delta,
 				Vector2(b0 - 0.4 * y_bot, y_bot) + delta]), inner)
-			if poly.size() >= 3:
-				ci.draw_polygon(poly, PackedColorArray([Color(1, 1, 1, band[2])]))
+			draw_poly_safe(ci, poly, Color(1, 1, 1, float(band[2])))
 	rr_outline(ci, r, rad, mt.lightened(0.35), 1.5)
 
 # ── 18 SLIME (animated: wobbling goo) ─────────────────────────────────────────
@@ -1102,8 +1108,7 @@ static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 		for i in range(n, -1, -1):
 			ribbon.append(Vector2(top[i].x, top[i].y + s * (0.12 + 0.04 * float(band))))
 		ribbon = clip_poly_to_rect(ribbon, r)
-		if ribbon.size() >= 3:
-			ci.draw_polygon(ribbon, PackedColorArray([Color(ac.r, ac.g, ac.b, 0.22)]))
+		draw_poly_safe(ci, ribbon, Color(ac.r, ac.g, ac.b, 0.22))
 		ci.draw_polyline(top, Color(ac.lightened(0.30).r, ac.lightened(0.30).g, ac.lightened(0.30).b, 0.5), 1.5)
 	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
 
@@ -1197,9 +1202,7 @@ static func _marble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 			var poly := left.duplicate()
 			for k in range(right.size() - 1, -1, -1):
 				poly.append(right[k])
-			var cl := clip_poly_to_rect(poly, r)
-			if cl.size() >= 3:
-				ci.draw_polygon(cl, PackedColorArray([vc]))
+			draw_poly_safe(ci, clip_poly_to_rect(poly, r), vc)
 	# Mineral flecks for a stony read (per block, stable from the cell seed)
 	for i in 4:
 		var fx : float = r.position.x + s * (0.12 + float((seed_v * 13 + i * 29) % 76) / 100.0)
@@ -1209,8 +1212,7 @@ static func _marble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 	var sheen := clip_poly_to_rect(PackedVector2Array([
 		r.position + Vector2(s * 0.10, 0), r.position + Vector2(s * 0.34, 0),
 		r.position + Vector2(-s * 0.06, r.size.y), r.position + Vector2(-s * 0.30, r.size.y)]), r)
-	if sheen.size() >= 3:
-		ci.draw_polygon(sheen, PackedColorArray([Color(1, 1, 1, 0.12)]))
+	draw_poly_safe(ci, sheen, Color(1, 1, 1, 0.12))
 	ci.draw_circle(r.position + r.size * Vector2(0.28, 0.26), s * 0.05, Color(1, 1, 1, 0.20))
 	rr_outline(ci, r, rad, base.darkened(0.22), 1.5)
 
@@ -1263,6 +1265,5 @@ static func _hologram(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float
 	var glint := clip_poly_to_rect(PackedVector2Array([
 		Vector2(gx, r.position.y), Vector2(gx + gw, r.position.y),
 		Vector2(gx + gw - s * 0.30, r.end.y), Vector2(gx - s * 0.30, r.end.y)]), r)
-	if glint.size() >= 3:
-		ci.draw_polygon(glint, PackedColorArray([Color(1, 1, 1, 0.16)]))
+	draw_poly_safe(ci, glint, Color(1, 1, 1, 0.16))
 	rr_outline(ci, r, rad, top.lightened(0.30), 1.6)

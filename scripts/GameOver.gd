@@ -211,6 +211,7 @@ func _build_xp_card() -> void:
 	# Start the display at the PRE-run XP, then animate up to the new total
 	var xp0 : int = GameState.last_xp_before
 	var xp1 : int = GameState.player_xp
+	@warning_ignore("static_called_on_instance")
 	shown_level = GameState.level_for_xp(xp0)
 	_set_xp_display(float(xp0))
 
@@ -221,6 +222,7 @@ func _build_xp_card() -> void:
 
 func _set_xp_display(v: float) -> void:
 	var xp  := int(v)
+	@warning_ignore("static_called_on_instance")
 	var lvl := GameState.level_for_xp(xp)
 	if lvl != shown_level:
 		shown_level = lvl
@@ -234,6 +236,7 @@ func _set_xp_display(v: float) -> void:
 		xp_count_label.text = "MAX LEVEL"
 		return
 	xp_level_label.text = "LEVEL " + str(lvl)
+	@warning_ignore("static_called_on_instance")
 	var prog : Array = GameState.progress_for_xp(xp)
 	xp_fill.size.x = XP_BAR_W * clampf(float(prog[0]) / float(maxi(prog[1], 1)), 0.0, 1.0)
 	xp_count_label.text = str(prog[0]) + " / " + str(prog[1]) + " XP"
