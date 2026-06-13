@@ -157,12 +157,11 @@ var tray_pop_t : float = 0.0
 var drag_layer : Node2D
 
 func _ready() -> void:
-	# AUTO theme: a continued run keeps its theme; a fresh run starts on a
-	# RANDOM theme so the default skin set never feels predictable
-	if GameState.has_save:
-		theme_idx = GameState.theme_idx % THEMES.size()
-	else:
-		theme_idx = randi() % GameState.CAT_SKIN   # 0..19, never the secret cat
+	# Keep whatever skin was last in play: a continued run restores its theme,
+	# and a fresh run inherits the skin from the run that just ended (no jarring
+	# re-randomize on death). It still rotates during play on line milestones.
+	theme_idx = GameState.theme_idx % THEMES.size()
+	if not GameState.has_save:
 		GameState.set_theme(theme_idx)
 	curr_bg   = THEMES[_visual_idx()]["bg"]
 	prev_bg   = curr_bg
@@ -1149,7 +1148,71 @@ func _draw_bg_pattern() -> void:
 				var hue3 := fmod(float(i) * 0.30 + dt2 * 0.08, 1.0)
 				draw_polygon(PackedVector2Array([origin, tip2 + Vector2(-40, 0), tip2 + Vector2(40, 0)]),
 					PackedColorArray([Color.from_hsv(hue3, 0.5, 1.0, 0.05)]))
-		20:  # Meow Town — drifting paw prints, floating yarn + fish
+		20:  # Aurora Sky — twinkling stars + flowing light curtains
+			var at := Time.get_ticks_msec() * 0.001
+			for i in 22:
+				var stx : float = fmod(float(i * 131 + 23) * 17.3, 414.0)
+				var sty : float = fmod(float(i * 89 + 11) * 23.7, 896.0)
+				var tw : float = 0.4 + 0.6 * absf(sin(at * 1.5 + float(i)))
+				draw_circle(Vector2(stx, sty), 1.5, Color(1, 1, 1, 0.20 * tw))
+			for band in 3:
+				var hue : float = fmod(0.34 + float(band) * 0.10 + 0.04 * sin(at * 0.3), 1.0)
+				var ac := Color.from_hsv(hue, 0.6, 1.0, 0.06)
+				var top := PackedVector2Array()
+				var by : float = 200.0 + float(band) * 180.0
+				for k in 11:
+					var x : float = float(k) / 10.0 * 414.0
+					var y : float = by + sin(at * 0.8 + float(k) * 0.5 + float(band) * 1.3) * 60.0
+					top.append(Vector2(x, y))
+				var ribbon := top.duplicate()
+				for k in range(10, -1, -1):
+					ribbon.append(Vector2(top[k].x, top[k].y + 130.0))
+				draw_polygon(ribbon, PackedColorArray([ac]))
+		21:  # Plasma Field — floating, pulsing energy orbs
+			var pt := Time.get_ticks_msec() * 0.001
+			for i in 5:
+				var ox : float = 80.0 + float(i) * 75.0 + sin(pt * 0.4 + float(i)) * 30.0
+				var oy : float = 150.0 + float(i) * 150.0 + cos(pt * 0.5 + float(i) * 1.3) * 40.0
+				var pls : float = 0.5 + 0.5 * sin(pt * 2.0 + float(i))
+				draw_circle(Vector2(ox, oy), 30.0 + pls * 12.0, Color(0.7, 0.4, 1.0, 0.05))
+				draw_circle(Vector2(ox, oy), 11.0, Color(0.85, 0.6, 1.0, 0.07))
+		22:  # Marble Hall — large soft drifting veins
+			for i in 4:
+				var vx : float = 60.0 + float(i) * 110.0
+				var pts := PackedVector2Array()
+				for k in 9:
+					var y : float = float(k) / 8.0 * 896.0
+					pts.append(Vector2(vx + sin(float(k) * 0.7 + float(i) * 2.0) * 42.0, y))
+				draw_polyline(pts, Color(0.40, 0.38, 0.46, 0.05), 9.0)
+				draw_polyline(pts, Color(1, 1, 1, 0.05), 3.0)
+		23:  # Data Stream — falling green code columns
+			var dt3 := Time.get_ticks_msec() * 0.001
+			for c in 12:
+				var cx : float = 18.0 + float(c) * 34.0
+				var spd : float = 120.0 + float((c * 37) % 5) * 50.0
+				var head : float = fmod(dt3 * spd + float(c * 91), 1000.0)
+				for k in 8:
+					var gy : float = head - float(k) * 22.0
+					if gy < 0.0 or gy > 896.0:
+						continue
+					var a : float = (1.0 - float(k) / 8.0) * 0.10
+					draw_rect(Rect2(cx, gy, 7.0, 12.0), Color(0.3, 1.0, 0.45, a), true)
+		24:  # Holo Deck — rolling scanlines + floating wireframe boxes
+			var ht := Time.get_ticks_msec() * 0.001
+			var hoff := fmod(ht * 30.0, 28.0)
+			for yy in range(int(hoff) - 28, 896, 28):
+				draw_line(Vector2(0, float(yy)), Vector2(414, float(yy)), Color(0.5, 0.9, 1.0, 0.04), 1.0)
+			for i in 3:
+				var wx : float = 100.0 + float(i) * 110.0 + sin(ht * 0.4 + float(i)) * 20.0
+				var wy : float = 200.0 + float(i) * 230.0 + cos(ht * 0.5 + float(i)) * 30.0
+				var sz := 26.0
+				var hue : float = fmod(0.5 + float(i) * 0.1 + ht * 0.05, 1.0)
+				var wc := Color.from_hsv(hue, 0.5, 1.0, 0.06)
+				draw_rect(Rect2(wx - sz, wy - sz, sz * 2.0, sz * 2.0), wc, false, 1.5)
+				draw_rect(Rect2(wx - sz + 9.0, wy - sz - 9.0, sz * 2.0, sz * 2.0), wc, false, 1.5)
+				draw_line(Vector2(wx - sz, wy - sz), Vector2(wx - sz + 9.0, wy - sz - 9.0), wc, 1.0)
+				draw_line(Vector2(wx + sz, wy + sz), Vector2(wx + sz + 9.0, wy + sz - 9.0), wc, 1.0)
+		25:  # Meow Town — drifting paw prints, floating yarn + fish
 			var mt3 := Time.get_ticks_msec() * 0.001
 			var paw := Color(1.0, 0.80, 0.88, 0.07)
 			for i in 9:

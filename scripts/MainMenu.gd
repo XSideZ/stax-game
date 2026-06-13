@@ -19,7 +19,8 @@ const FALL_COUNT := 12
 const SHOW_SKIN_PICKER := true
 const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 	"CANDY", "FROST", "GRASS", "WATER", "LAVA", "WOOD", "GALAXY",
-	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO"]
+	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO",
+	"AURORA", "PLASMA", "MARBLE", "MATRIX", "HOLOGRAM"]
 
 var orbs    : Array = []
 var fallers : Array = []
@@ -560,6 +561,7 @@ func _ach_current_tier(g: Dictionary) -> int:
 
 func _ach_desc(g: Dictionary, target: int) -> String:
 	var d : String = g["desc"]
+	@warning_ignore("static_called_on_instance")
 	return (d % GameState.fmt(target)) if d.contains("%s") else d
 
 func _make_ach_card(g: Dictionary) -> PanelContainer:
@@ -582,12 +584,23 @@ func _make_ach_card(g: Dictionary) -> PanelContainer:
 	sb.content_margin_left = 14; sb.content_margin_right = 12
 	sb.content_margin_top = 10;  sb.content_margin_bottom = 10
 	card.add_theme_stylebox_override("panel", sb)
-	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	# PASS (not STOP) so a touch-drag starting on a card still reaches the
+	# ScrollContainer and scrolls the list. Toggle only on a TAP — a press and
+	# release with little movement — so scrolling never expands a card.
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	card.set_meta("moved", false)
 	card.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			Sfx.play_click()
-			ach_expanded[g["id"]] = not ach_expanded.get(g["id"], false)
-			_populate_achievements())
+		if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+			if ev.pressed:
+				card.set_meta("press_pos", ev.position)
+				card.set_meta("moved", false)
+			elif not card.get_meta("moved", false):
+				Sfx.play_click()
+				ach_expanded[g["id"]] = not ach_expanded.get(g["id"], false)
+				_populate_achievements()
+		elif ev is InputEventMouseMotion and card.has_meta("press_pos"):
+			if ev.position.distance_to(card.get_meta("press_pos")) > 12.0:
+				card.set_meta("moved", true))
 
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 12)
@@ -665,6 +678,7 @@ func _make_ach_card(g: Dictionary) -> PanelContainer:
 		bar.add_theme_stylebox_override("fill", bfg)
 		ph.add_child(bar)
 		var pl := Label.new()
+		@warning_ignore("static_called_on_instance")
 		pl.text = GameState.fmt(mini(v, target)) + " / " + GameState.fmt(target)
 		pl.add_theme_font_size_override("font_size", 11)
 		pl.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
@@ -676,8 +690,8 @@ func _make_ach_card(g: Dictionary) -> PanelContainer:
 	var chip_xp : int = tiers[shown][1]
 	if done:
 		chip_xp = 0
-		for tr in tiers:
-			chip_xp += tr[1]
+		for tier in tiers:
+			chip_xp += tier[1]
 	chip.text = "+" + str(chip_xp) + " XP"
 	chip.add_theme_font_size_override("font_size", 13)
 	var csb := StyleBoxFlat.new()

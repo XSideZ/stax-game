@@ -11,7 +11,7 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25]
 
 # 4x4 ordered-dither (Bayer) matrix — the classic limited-palette gradient trick
 const BAYER4 : Array = [
@@ -120,7 +120,12 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		17: _gold(ci, r, col, s, rad, seed_v, pr)
 		18: _slime(ci, r, col, s, rad, seed_v)
 		19: _disco(ci, r, col, s, rad, seed_v)
-		20: _cat(ci, r, col, s, rad, seed_v)
+		20: _aurora(ci, r, col, s, rad, seed_v)
+		21: _plasma(ci, r, col, s, rad, seed_v)
+		22: _marble(ci, r, col, s, rad, seed_v, pr)
+		23: _matrix(ci, r, col, s, rad, seed_v)
+		24: _hologram(ci, r, col, s, rad, seed_v)
+		25: _cat(ci, r, col, s, rad, seed_v)
 	if with_overlay and OVERLAY_STYLES.has(style):
 		paint_overlay(ci, style, r, col, seed_v)
 
@@ -172,7 +177,10 @@ static func _isect_edge(a: Vector2, b: Vector2, r: Rect2, e: int) -> Vector2:
 
 # ── Rounded helpers ───────────────────────────────────────────────────────────
 static func rr_points(r: Rect2, rad: float) -> PackedVector2Array:
-	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
+	# Leave at least a 1px straight edge on the short side. A radius of exactly
+	# half the dimension makes opposite corner arcs share a point, producing a
+	# degenerate polygon that fails triangulation (e.g. candy's thin gloss bar).
+	rad = minf(rad, maxf((minf(r.size.x, r.size.y) - 1.0) * 0.5, 0.0))
 	var pts := PackedVector2Array()
 	var corners := [
 		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
@@ -306,7 +314,7 @@ static func _brick(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	rr_outline(ci, r, rad, col.darkened(0.40), 1.5)
 
 # ── 4 CRYSTAL (v4: the block IS a cut gem — octagonal emerald cut) ───────────
-static func _crystal(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int = 0) -> void:
+static func _crystal(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, _seed_v: int = 0) -> void:
 	var cut := s * 0.24
 	var oct := PackedVector2Array([
 		Vector2(r.position.x + cut, r.position.y),
@@ -453,60 +461,109 @@ static func _grass(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 
 # ── 8 WATER (animated) ────────────────────────────────────────────────────────
 static func _water(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var w := col.lerp(Color(0.20, 0.55, 1.00), 0.55)
 	var t := Time.get_ticks_msec() * 0.001
+	var ph := float(seed_v) * 0.7
+	var shallow := col.lerp(Color(0.32, 0.74, 1.00), 0.68)
+	var deep := col.lerp(Color(0.03, 0.20, 0.52), 0.80)
+	# Drop shadow
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
-	rr_grad(ci, r, rad,
-		Color(w.lightened(0.30).r, w.lightened(0.30).g, w.lightened(0.30).b, 0.95),
-		Color(w.darkened(0.25).r,  w.darkened(0.25).g,  w.darkened(0.25).b,  0.95))
-	for wave in 2:
-		var base_y : float = r.position.y + r.size.y * (0.35 + 0.30 * float(wave))
+	# Body — bright near the surface, deep blue toward the bottom
+	rr_grad(ci, r, rad, shallow.lightened(0.12), deep)
+	# Caustic light ripples dancing under the surface
+	for c in 2:
+		var cy : float = r.position.y + r.size.y * (0.50 + 0.26 * float(c))
 		var pts := PackedVector2Array()
 		for i in 9:
-			var x : float = r.position.x + s * 0.09 + float(i) / 8.0 * (r.size.x - s * 0.18)
-			var y : float = base_y + sin(t * 2.2 + float(seed_v) * 0.7 + float(wave) * 2.1 + float(i) * 0.8) * s * 0.057
+			var fx : float = float(i) / 8.0
+			var x : float = r.position.x + fx * r.size.x
+			var y : float = cy + sin(t * 1.9 + ph + fx * 7.0 + float(c) * 1.7) * s * 0.045
 			pts.append(Vector2(x, y))
-		ci.draw_polyline(pts, Color(1, 1, 1, 0.30 - 0.10 * float(wave)), 1.5)
-	var sx : float = r.position.x + s * 0.14 + fmod(t * s * 0.2 + float(seed_v % 13) * 3.7, r.size.x - s * 0.28)
-	ci.draw_circle(Vector2(sx, r.position.y + r.size.y * 0.22), s * 0.045, Color(1, 1, 1, 0.55))
-	# Bubbles rising from the depths, swaying as they go
-	for i in 2:
-		var bk := fmod(t * (0.22 + float(i) * 0.09) + float(seed_v % 7 + i * 3) * 0.14, 1.0)
-		var bx := r.position.x + r.size.x * (0.30 + 0.40 * float((seed_v + i * 5) % 3) / 2.0) \
-			+ sin(t * 2.5 + float(i) * 2.0) * s * 0.04
-		var by := lerpf(r.end.y - s * 0.10, r.position.y + s * 0.12, bk)
-		ci.draw_circle(Vector2(bx, by), s * (0.025 + float(i) * 0.012), Color(1, 1, 1, 0.40 * (1.0 - bk * 0.6)))
-	rr_outline(ci, r, rad, w.lightened(0.30), 1.5)
+		ci.draw_polyline(pts, Color(0.75, 0.95, 1.0, 0.18 - 0.06 * float(c)), 1.5)
+	# Surface — a glassy rippling waterline near the top
+	var surf_y : float = r.position.y + r.size.y * 0.20
+	var n := 8
+	var top := PackedVector2Array()
+	for i in n + 1:
+		var fx : float = float(i) / float(n)
+		var x : float = r.position.x + fx * r.size.x
+		var y : float = surf_y + sin(t * 2.4 + ph + fx * 6.5) * s * 0.040
+		top.append(Vector2(x, y))
+	var ribbon := top.duplicate()
+	for i in range(n, -1, -1):
+		ribbon.append(Vector2(top[i].x, top[i].y + s * 0.08))
+	ribbon = clip_poly_to_rect(ribbon, r)
+	if ribbon.size() >= 3:
+		ci.draw_polygon(ribbon, PackedColorArray([Color(1, 1, 1, 0.20)]))
+	ci.draw_polyline(top, Color(1, 1, 1, 0.55), 1.5)
+	# Rising bubbles — sway as they climb, shrink and fade near the surface
+	for i in 3:
+		var bk : float = fmod(t * (0.20 + float(i) * 0.07) + float(seed_v % 7 + i * 3) * 0.17, 1.0)
+		var bx : float = r.position.x + r.size.x * (0.26 + 0.46 * float((seed_v + i * 5) % 3) / 2.0) \
+			+ sin(t * 2.4 + float(i) * 2.0) * s * 0.045
+		var by : float = lerpf(r.end.y - s * 0.08, surf_y + s * 0.04, bk)
+		var br : float = s * (0.022 + float(i) * 0.010) * (1.0 - bk * 0.4)
+		var ba : float = 0.42 * (1.0 - bk * 0.5)
+		ci.draw_circle(Vector2(bx, by), br, Color(0.85, 0.96, 1.0, ba))
+		ci.draw_circle(Vector2(bx - br * 0.3, by - br * 0.3), br * 0.4, Color(1, 1, 1, ba * 0.9))
+	# Specular glint sliding across the surface
+	var gx : float = r.position.x + s * 0.16 + fmod(t * s * 0.18 + float(seed_v % 13) * 3.7, r.size.x - s * 0.32)
+	ci.draw_circle(Vector2(gx, surf_y - s * 0.02), s * 0.05, Color(1, 1, 1, 0.30))
+	rr_outline(ci, r, rad, shallow.lightened(0.30), 1.5)
 
 # ── 9 LAVA (animated) ─────────────────────────────────────────────────────────
 static func _lava(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var l := col.lerp(Color(1.00, 0.38, 0.05), 0.70)
 	var t := Time.get_ticks_msec() * 0.001
-	var pulse := 0.55 + 0.45 * sin(t * 2.6 + float(seed_v % 9) * 0.8)
-	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.35))
+	var pulse := 0.5 + 0.5 * sin(t * 2.3 + float(seed_v % 9) * 0.8)
+	var hot := col.lerp(Color(1.00, 0.42, 0.04), 0.78)
+	# Drop shadow
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.40))
+	# Molten base — this is what glows through the cracks and the rim seam
 	rr_grad(ci, r, rad,
-		Color(0.16, 0.07, 0.05).lerp(l.darkened(0.25), 0.25 + pulse * 0.18),
-		Color(0.10, 0.04, 0.03))
-	var crack_col := Color(l.r, l.g, l.b, 0.45 + pulse * 0.55)
+		Color(1.0, 0.82, 0.28).lerp(hot, 0.35 + pulse * 0.25),
+		hot.darkened(0.20))
+	# Cooled basalt crust on top, inset so a glowing seam rings the edge
+	var crust := r.grow(-s * 0.07)
+	rr_grad(ci, crust, rad * 0.7,
+		Color(0.16, 0.07, 0.05).lerp(Color(0.26, 0.12, 0.08), pulse * 0.5),
+		Color(0.08, 0.03, 0.02))
+	# Glowing molten veins, drawn halo -> body -> hot core. Both run edge-to-edge
+	# at fixed fractions so the cracks line up across neighbouring blocks; the
+	# waypoint jitters per seed so no two blocks crack the same way.
+	var halo := Color(1.0, 0.35, 0.05, 0.30 + pulse * 0.30)
+	var body := Color(1.0, 0.55, 0.12, 0.55 + pulse * 0.40)
+	var core := Color(1.0, 0.90, 0.45, 0.65 + pulse * 0.35)
 	var h := seed_v
-	for i in 3:
-		h = (h * 1103515 + 12345) % 2147483647
-		var x0 : float = r.position.x + s * 0.11 + float(h % 100) / 100.0 * (r.size.x - s * 0.36)
-		var y0 : float = r.position.y + s * 0.11 + float((h / 100) % 100) / 100.0 * (r.size.y - s * 0.36)
-		var p0 := Vector2(x0, y0)
-		var p1 := p0 + Vector2(float((h / 7) % 13) - 6.0, float((h / 11) % 13) - 6.0) * s * 0.03
-		var p2 := p1 + Vector2(float((h / 13) % 11) - 5.0, float((h / 17) % 11) - 5.0) * s * 0.027
-		ci.draw_polyline(PackedVector2Array([p0, p1, p2]), crack_col, 2.0)
-	ci.draw_circle(r.get_center() + Vector2(float(seed_v % 7) - 3.0, float(seed_v % 5) - 2.0) * s * 0.045,
-		s * (0.068 + pulse * 0.045), Color(1.0, 0.75, 0.25, 0.30 + pulse * 0.35))
-	# Spark leaping from the crack, arcing up then dying
-	var sk := fmod(t * 0.55 + float(seed_v % 17) * 0.11, 1.0)
-	if sk < 0.45:
-		var kk := sk / 0.45
-		var ox := r.position.x + r.size.x * (0.30 + 0.40 * float(seed_v % 4) / 3.0)
-		var spark := Vector2(ox + kk * s * 0.16, r.position.y + r.size.y * 0.55 \
-			- sin(kk * PI) * s * 0.30)
-		ci.draw_circle(spark, s * 0.026, Color(1.0, 0.85, 0.35, 0.85 * (1.0 - kk)))
+	h = (h * 1103515 + 12345) % 2147483647
+	var hy0 : float = r.position.y + r.size.y * 0.5
+	var jm := Vector2(r.position.x + r.size.x * 0.5,
+		r.position.y + r.size.y * (0.30 + float(h % 100) / 100.0 * 0.40))
+	var hv := PackedVector2Array([Vector2(r.position.x, hy0), jm, Vector2(r.end.x, hy0)])
+	h = (h * 1103515 + 12345) % 2147483647
+	var vx0 : float = r.position.x + r.size.x * 0.5
+	var jm2 := Vector2(r.position.x + r.size.x * (0.30 + float(h % 100) / 100.0 * 0.40),
+		r.position.y + r.size.y * 0.5)
+	var vv := PackedVector2Array([Vector2(vx0, r.position.y), jm2, Vector2(vx0, r.end.y)])
+	for v : PackedVector2Array in [hv, vv]:
+		ci.draw_polyline(v, halo, s * 0.11)
+		ci.draw_polyline(v, body, s * 0.055)
+		ci.draw_polyline(v, core, s * 0.022)
+	# A bright glob of magma flowing along the horizontal crack
+	var fk : float = fmod(t * 0.4 + float(seed_v % 17) * 0.11, 1.0)
+	var flow : Vector2
+	if fk < 0.5:
+		flow = hv[0].lerp(hv[1], fk * 2.0)
+	else:
+		flow = hv[1].lerp(hv[2], (fk - 0.5) * 2.0)
+	ci.draw_circle(flow, s * 0.05, Color(1.0, 0.95, 0.6, 0.5 + pulse * 0.3))
+	ci.draw_circle(flow, s * 0.028, Color(1, 1, 0.85, 0.85))
+	# Embers lifting off and fading
+	for i in 2:
+		var ek : float = fmod(t * (0.5 + float(i) * 0.13) + float(seed_v % 11 + i * 5) * 0.19, 1.0)
+		var ex : float = r.position.x + r.size.x * (0.28 + 0.44 * float((seed_v + i * 3) % 3) / 2.0) \
+			+ sin(t * 3.0 + float(i) * 2.0) * s * 0.05
+		var ey : float = lerpf(r.end.y - s * 0.12, r.position.y + s * 0.10, ek)
+		ci.draw_circle(Vector2(ex, ey), s * 0.018 * (1.0 - ek * 0.5),
+			Color(1.0, 0.7, 0.25, 0.7 * (1.0 - ek)))
 	rr_outline(ci, r, rad, Color(0.05, 0.02, 0.02, 0.9), 1.5)
 
 # ── 10 WOOD ───────────────────────────────────────────────────────────────────
@@ -544,13 +601,12 @@ static func _wood(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, se
 	rr_outline(ci, r, rad, w.darkened(0.45), 1.5)
 
 # ── 12 HONEY (animated: continuous honeycomb + oozing drip) ──────────────────
-static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
 	var ps := pr.size.x if pr.size.x > 0.0 else s
 	# Every piece colour maps to a SHADE OF AMBER (light wildflower to dark
 	# buckwheat) — pieces stay tellable apart, nothing reads green/blue
 	var tone := fmod(col.h * 2.7 + col.v * 0.5, 1.0)
 	var hn := Color(1.00, 0.76, 0.28).lerp(Color(0.78, 0.48, 0.10), tone)
-	var t := Time.get_ticks_msec() * 0.001
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
 	# Light base = the wax walls; the darker hex cells get drawn on top
 	rr_grad(ci, r, rad, hn.lightened(0.35), hn.lightened(0.05))
@@ -625,47 +681,51 @@ static func paint_overlay(ci: CanvasItem, style: int, r: Rect2, col: Color, seed
 				ci.draw_line(Vector2(dx2, r.end.y - s * 0.02), Vector2(dx2, r.end.y + stretch2), gl.darkened(0.05), s * 0.055 * (0.55 + 0.45 * k2))
 				ci.draw_circle(Vector2(dx2, r.end.y + stretch2), s * 0.045 * (0.55 + 0.45 * k2), gl.lightened(0.10))
 
-# ── 13 RETRO (chunky low-res pixel block, ordered-dither gradient) ────────────
-# The whole block is an 8x8 grid of fat pixels: dark sprite outline, a
-# dithered diagonal light gradient through a 4-shade palette (the classic
-# limited-colour look), bright bevel pixels top-left + a wandering twinkle.
+# ── 13 RETRO (v4: raised 8-bit arcade button + CRT scanline sweep) ───────────
+# The block is a chunky 3D pixel button — top/left pixels lit, bottom/right
+# shaded — with a dithered interior, a bright glint, a scanline rolling down
+# the "screen" and a blinking twinkle pixel.
 static func _retro(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, seed_v: int) -> void:
 	var px := s / 8.0
 	var t := Time.get_ticks_msec() * 0.001
 	# Hard drop shadow (no soft edges in 8-bit land)
-	ci.draw_rect(Rect2(r.position + Vector2(px * 0.7, px * 0.7), r.size), Color(0, 0, 0, 0.35), true)
-	var outline := col.darkened(0.62)
-	var pal := [col.darkened(0.40), col.darkened(0.18), col, col.lightened(0.40)]
+	ci.draw_rect(Rect2(r.position + Vector2(px * 0.8, px * 0.8), r.size), Color(0, 0, 0, 0.35), true)
+	var lite := col.lightened(0.48)
+	var lite2 := col.lightened(0.20)
+	var dark := col.darkened(0.42)
+	var dark2 := col.darkened(0.18)
 	for gy in 8:
 		for gx in 8:
 			var cell := Rect2(r.position + Vector2(float(gx) * px, float(gy) * px), Vector2(px + 0.6, px + 0.6))
-			# Outer ring = crisp dark pixel outline
-			if gx == 0 or gy == 0 or gx == 7 or gy == 7:
-				ci.draw_rect(cell, outline, true)
-				continue
-			# Brightness: diagonal light (top-left bright) + a soft highlight bump
-			var fx := float(gx) / 7.0
-			var fy := float(gy) / 7.0
-			var v := 1.0 - (fx + fy) * 0.42
-			v += 0.28 * (1.0 - clampf(Vector2(fx - 0.30, fy - 0.28).length() * 2.3, 0.0, 1.0))
-			v = clampf(v, 0.0, 1.0)
-			# Quantise into the 4-shade palette with ordered dithering
-			var scaled := v * 3.0
-			var bi := int(floor(scaled))
-			var frac := scaled - float(bi)
-			var thr := float(BAYER4[gy % 4][gx % 4]) / 16.0
-			var idx := clampi(bi + (1 if frac > thr else 0), 0, 3)
-			ci.draw_rect(cell, pal[idx], true)
-	# Bright bevel highlight pixels, top-left interior
-	ci.draw_rect(Rect2(r.position + Vector2(px * 1.0, px * 1.0), Vector2(px * 2.0 + 0.6, px + 0.6)), col.lightened(0.62), true)
-	ci.draw_rect(Rect2(r.position + Vector2(px * 1.0, px * 2.0), Vector2(px + 0.6, px + 0.6)), col.lightened(0.62), true)
+			var c : Color
+			# Two-pixel raised bevel: top/left light, bottom/right dark
+			if gx == 0 or gy == 0:
+				c = lite
+			elif gx == 7 or gy == 7:
+				c = dark
+			elif gx == 1 or gy == 1:
+				c = lite2
+			elif gx == 6 or gy == 6:
+				c = dark2
+			else:
+				# Flat face with a 2-tone dither check for that limited-palette feel
+				c = col if (gx + gy) % 2 == 0 else col.darkened(0.07)
+			ci.draw_rect(cell, c, true)
+	# Bright glint pixels, top-left interior (an L of light)
+	ci.draw_rect(Rect2(r.position + Vector2(px * 2.0, px * 2.0), Vector2(px * 2.0 + 0.6, px + 0.6)), col.lightened(0.78), true)
+	ci.draw_rect(Rect2(r.position + Vector2(px * 2.0, px * 3.0), Vector2(px + 0.6, px + 0.6)), col.lightened(0.78), true)
+	# CRT scanline rolling down the face (one fat pixel row, brightened)
+	var scan := int(fmod(t * 6.0 + float(seed_v % 8), 8.0))
+	if scan >= 1 and scan <= 6:
+		ci.draw_rect(Rect2(r.position + Vector2(px, float(scan) * px + px * 0.25), Vector2(s - px * 2.0, px * 0.5)),
+			Color(1, 1, 1, 0.16), true)
 	# A single twinkle pixel that blinks on the block's own phase
 	var bl := sin(t * 4.0 + float(seed_v) * 1.7)
-	if bl > 0.4:
-		var sxp := 3 + (seed_v % 3)
-		var syp := 3 + ((seed_v / 3) % 2)
+	if bl > 0.5:
+		var sxp := 4 + (seed_v % 2)
+		var syp := 4 + ((seed_v / 2) % 2)
 		ci.draw_rect(Rect2(r.position + Vector2(float(sxp) * px, float(syp) * px), Vector2(px + 0.6, px + 0.6)),
-			Color(1, 1, 1, (bl - 0.4) / 0.6 * 0.9), true)
+			Color(1, 1, 1, (bl - 0.5) / 0.5 * 0.85), true)
 
 # ── 14 BUBBLE (animated: iridescent soap film) ────────────────────────────────
 static func _bubble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
@@ -1011,3 +1071,198 @@ static func _galaxy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 	ci.draw_line(hp + Vector2(0, -s * 0.09), hp + Vector2(0, s * 0.09), Color(1, 1, 1, ha), 1.0)
 	ci.draw_circle(hp, s * 0.036, Color(1, 1, 1, ha))
 	rr_outline(ci, r, rad, g.lightened(0.25), 1.5)
+
+# ── 20 AURORA (animated: night sky with flowing light curtains) ───────────────
+# Deep night-sky block with twinkling stars and a few rippling aurora ribbons;
+# the curtain hues are seeded off the piece colour so blocks stay tellable apart.
+static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
+	rr_grad(ci, r, rad, Color(0.04, 0.06, 0.18), Color(0.02, 0.10, 0.16))
+	# Twinkling stars
+	for i in 4:
+		var hsh := seed_v * 41 + i * 97
+		var stx : float = r.position.x + s * (0.12 + float(hsh % 76) / 100.0)
+		var sty : float = r.position.y + s * (0.08 + float((hsh / 7) % 46) / 100.0)
+		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(hsh)))
+		ci.draw_circle(Vector2(stx, sty), s * 0.013, Color(1, 1, 1, 0.5 * tw))
+	# Aurora curtains — rippling horizontal ribbons, hue seeded off the piece
+	var n := 8
+	for band in 3:
+		var hue : float = fmod(0.30 + col.h * 0.40 + float(band) * 0.10 + 0.04 * sin(t * 0.3 + float(seed_v)), 1.0)
+		var ac := Color.from_hsv(hue, 0.62, 1.0)
+		var by0 : float = r.position.y + r.size.y * (0.30 + 0.16 * float(band))
+		var top := PackedVector2Array()
+		for i in n + 1:
+			var fx : float = float(i) / float(n)
+			var x : float = r.position.x + fx * r.size.x
+			var y : float = by0 + sin(t * 1.1 + float(seed_v) * 0.6 + fx * 5.0 + float(band) * 1.3) * s * 0.09
+			top.append(Vector2(x, y))
+		var ribbon := top.duplicate()
+		for i in range(n, -1, -1):
+			ribbon.append(Vector2(top[i].x, top[i].y + s * (0.12 + 0.04 * float(band))))
+		ribbon = clip_poly_to_rect(ribbon, r)
+		if ribbon.size() >= 3:
+			ci.draw_polygon(ribbon, PackedColorArray([Color(ac.r, ac.g, ac.b, 0.22)]))
+		ci.draw_polyline(top, Color(ac.lightened(0.30).r, ac.lightened(0.30).g, ac.lightened(0.30).b, 0.5), 1.5)
+	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
+
+# ── 21 PLASMA (animated: electric energy ball) ───────────────────────────────
+# Dark glass with a pulsing glowing core and jagged electric arcs crackling out
+# toward the edges; the energy colour is the piece colour pushed toward violet.
+static func _plasma(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	var pc := col.lerp(Color(0.45, 0.35, 1.00), 0.50)   # electric blue-violet, piece-tinted
+	var pulse := 0.5 + 0.5 * sin(t * 4.0 + float(seed_v % 9))
+	var c := r.get_center()
+	# Dark glass sphere
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.40))
+	rr_grad(ci, r, rad, Color(0.09, 0.05, 0.20), Color(0.03, 0.02, 0.09))
+	# Soft energy haze filling the globe
+	ci.draw_circle(c, s * 0.42, Color(pc.r, pc.g, pc.b, 0.07 + 0.05 * pulse))
+	# Lightning tendrils — each snakes from the core out to a wandering anchor on
+	# the glass shell, drawn as a coloured halo with a white-hot core line, and a
+	# bright spark where it kisses the glass.
+	var h := seed_v
+	var arms := 5
+	for arm in arms:
+		h = (h * 1103515 + 12345) % 2147483647
+		var ang : float = float(arm) * TAU / float(arms) + t * 0.5 + 0.4 * sin(t * 1.3 + float(arm))
+		var reach : float = s * (0.34 + 0.06 * sin(t * 5.0 + float(arm) * 2.0 + float(h % 7)))
+		var pts := PackedVector2Array([c])
+		var steps := 5
+		for k in range(1, steps + 1):
+			var f : float = float(k) / float(steps)
+			var perp : float = ang + PI * 0.5
+			var jit : float = sin(t * 11.0 + float(arm) * 3.0 + float(k) * 2.3 + float(h % 11)) * s * 0.055 * (1.0 - f * 0.5)
+			pts.append(c + Vector2(cos(ang), sin(ang)) * (f * reach) + Vector2(cos(perp), sin(perp)) * jit)
+		var tip := pts[pts.size() - 1]
+		ci.draw_polyline(pts, Color(pc.lightened(0.30).r, pc.lightened(0.30).g, pc.lightened(0.30).b, 0.35 + 0.25 * pulse), 3.0)
+		ci.draw_polyline(pts, Color(1, 1, 1, 0.70), 1.2)
+		ci.draw_circle(tip, s * 0.022, Color(pc.lightened(0.60).r, pc.lightened(0.60).g, pc.lightened(0.60).b, 0.70))
+	# Hot core on top of the tendril roots
+	ci.draw_circle(c, s * (0.15 + 0.04 * pulse),
+		Color(pc.lightened(0.45).r, pc.lightened(0.45).g, pc.lightened(0.45).b, 0.35 + 0.25 * pulse))
+	ci.draw_circle(c, s * 0.075, Color(1, 1, 1, 0.70 + 0.25 * pulse))
+	# Glass shell highlight (top-left crescent) + rim
+	ci.draw_arc(c, s * 0.40, PI * 0.95, PI * 1.50, 12, Color(1, 1, 1, 0.20), 2.0, false)
+	rr_outline(ci, r, rad, pc.lightened(0.35), 1.5)
+
+# ── 22 MARBLE (veined stone — veins line up continuously across the board) ───
+# Luxe stone tile: piece colour washed near-white with darker jagged veins. The
+# veins live in pr (pattern) space as value-noise lanes, so each block draws the
+# slice crossing it and the cracks run unbroken across neighbouring blocks.
+# Same canvas-continuous trick as honey/sakura/metals; static.
+static func _marble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	var base := col.lerp(Color(0.95, 0.95, 0.93), 0.78)
+	var vein := col.lerp(Color(0.32, 0.30, 0.38), 0.62)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
+	rr_grad(ci, r, rad, base.lightened(0.12), base.darkened(0.08))
+	# Pattern-space translation (zeroed for tiny squash wobble), so the vein field
+	# stays put while a cell animates and matches across blocks + drag preview.
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var spacing := ps * 0.62      # horizontal gap between vein lanes
+	var seg := ps * 0.30          # vertical spacing of value-noise nodes
+	var scan := spacing * 1.6
+	var lane0 := int(floor((pr.position.x - scan) / spacing))
+	var lane1 := int(ceil((pr.end.x + scan) / spacing))
+	var j0 := int(floor((pr.position.y - seg) / seg)) - 1
+	var j1 := int(ceil((pr.end.y + seg) / seg)) + 1
+	# Each vein flows on a low-frequency diagonal SWEEP (so it crosses the board
+	# instead of sitting in a vertical lane) plus fine value-noise jitter, and its
+	# WIDTH tapers along the run. Drawn as 3 ribbons — wide soft halo, mid, thin
+	# dark core — each clipped to the block so neighbours fill matching slices and
+	# the cracks stay unbroken across the whole board.
+	var passes := [[0.13, 0.07], [0.075, 0.14], [0.03, 0.44]]
+	for p : Array in passes:
+		var pw : float = s * float(p[0])
+		var vc := Color(vein.r, vein.g, vein.b, float(p[1]))
+		for lane in range(lane0, lane1 + 1):
+			var lane_base : float = float(lane) * spacing
+			var lphase : float = float(absi(lane * 2654435) % 1000) / 1000.0 * TAU
+			var left := PackedVector2Array()
+			var right := PackedVector2Array()
+			for j in range(j0, j1 + 1):
+				var y : float = float(j) * seg
+				var hsh := absi((lane * 73856093) ^ (j * 19349663))
+				var jit : float = (float(hsh % 1000) / 1000.0 - 0.5) * spacing * 0.5
+				var sweep : float = sin(y / (ps * 3.2) * PI + lphase) * spacing * 0.6
+				var x : float = lane_base + sweep + jit
+				var wv : float = pw * (0.55 + 0.9 * float((hsh / 7) % 100) / 100.0)
+				left.append(Vector2(x - wv * 0.5, y) + delta)
+				right.append(Vector2(x + wv * 0.5, y) + delta)
+			var poly := left.duplicate()
+			for k in range(right.size() - 1, -1, -1):
+				poly.append(right[k])
+			var cl := clip_poly_to_rect(poly, r)
+			if cl.size() >= 3:
+				ci.draw_polygon(cl, PackedColorArray([vc]))
+	# Mineral flecks for a stony read (per block, stable from the cell seed)
+	for i in 4:
+		var fx : float = r.position.x + s * (0.12 + float((seed_v * 13 + i * 29) % 76) / 100.0)
+		var fyy : float = r.position.y + s * (0.12 + float((seed_v * 7 + i * 53) % 76) / 100.0)
+		ci.draw_circle(Vector2(fx, fyy), s * 0.010, Color(vein.r, vein.g, vein.b, 0.16))
+	# Soft diagonal sheen + a glossy corner highlight (per block — it's lighting)
+	var sheen := clip_poly_to_rect(PackedVector2Array([
+		r.position + Vector2(s * 0.10, 0), r.position + Vector2(s * 0.34, 0),
+		r.position + Vector2(-s * 0.06, r.size.y), r.position + Vector2(-s * 0.30, r.size.y)]), r)
+	if sheen.size() >= 3:
+		ci.draw_polygon(sheen, PackedColorArray([Color(1, 1, 1, 0.12)]))
+	ci.draw_circle(r.position + r.size * Vector2(0.28, 0.26), s * 0.05, Color(1, 1, 1, 0.20))
+	rr_outline(ci, r, rad, base.darkened(0.22), 1.5)
+
+# ── 23 MATRIX (animated: falling digital code rain) ──────────────────────────
+# Black-green screen with columns of glyph pixels streaming down; the lead glyph
+# of each column glows white, the trail fades. Piece colour tints the green.
+static func _matrix(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	var g := col.lerp(Color(0.20, 1.00, 0.35), 0.70)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.40))
+	rr_grad(ci, r, rad, Color(0.02, 0.10, 0.04), Color(0.01, 0.04, 0.02))
+	var cols := 3
+	var cw := r.size.x / float(cols)
+	var cell := s * 0.13
+	for cidx in cols:
+		var cx : float = r.position.x + (float(cidx) + 0.5) * cw
+		var spd : float = 0.55 + 0.18 * float((seed_v * 7 + cidx * 13) % 5)
+		var head : float = fmod(t * spd + float((seed_v * 3 + cidx * 29) % 10) * 0.3, 1.4) * r.size.y
+		for k in 5:
+			var gy : float = r.position.y + head - float(k) * cell * 1.15
+			if gy < r.position.y + s * 0.05 or gy > r.end.y - s * 0.05:
+				continue
+			var a : float = 1.0 - float(k) / 5.0
+			var gc : Color = Color(1, 1, 1, a) if k == 0 else Color(g.r, g.g, g.b, a * 0.8)
+			ci.draw_rect(Rect2(cx - cell * 0.4, gy - cell * 0.4, cell * 0.8, cell * 0.8), gc, true)
+	rr_outline(ci, r, rad, g.darkened(0.20), 1.5)
+
+# ── 24 HOLOGRAM (animated: iridescent foil) ──────────────────────────────────
+# Holographic trading-card foil: a hue-shifting gradient, rolling scanlines and
+# a diagonal glint that sweeps across the block.
+static func _hologram(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	var hue : float = fmod(col.h + 0.18 * sin(t * 0.8 + float(seed_v % 11) * 0.6), 1.0)
+	if hue < 0.0:
+		hue += 1.0
+	var top := Color.from_hsv(hue, 0.55, 1.0)
+	var bot := Color.from_hsv(fmod(hue + 0.35, 1.0), 0.60, 0.90)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
+	rr_grad(ci, r, rad, top.lerp(Color(0.10, 0.10, 0.15), 0.35), bot.lerp(Color(0.05, 0.05, 0.10), 0.45))
+	# Rolling horizontal scanlines
+	var step := s * 0.13
+	var y : float = r.position.y + fmod(t * s * 0.25, step)
+	while y < r.end.y:
+		ci.draw_line(Vector2(r.position.x + s * 0.06, y), Vector2(r.end.x - s * 0.06, y), Color(1, 1, 1, 0.10), 1.0)
+		y += step
+	# Diagonal glint sweeping across, clipped to the block
+	var sweep := fmod(t * 0.5, 1.0)
+	var gx : float = lerpf(r.position.x - s * 0.40, r.end.x + s * 0.40, sweep)
+	var gw := s * 0.22
+	var glint := clip_poly_to_rect(PackedVector2Array([
+		Vector2(gx, r.position.y), Vector2(gx + gw, r.position.y),
+		Vector2(gx + gw - s * 0.30, r.end.y), Vector2(gx - s * 0.30, r.end.y)]), r)
+	if glint.size() >= 3:
+		ci.draw_polygon(glint, PackedColorArray([Color(1, 1, 1, 0.16)]))
+	rr_outline(ci, r, rad, top.lightened(0.30), 1.6)
