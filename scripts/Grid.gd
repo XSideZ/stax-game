@@ -34,6 +34,12 @@ var place_anim  : Array = []
 
 var last_place_center := Vector2.ZERO
 
+# Gravity-slam slide (the ultimate power) — blocks fly to one edge, then settle
+const SLAM_DUR := 0.42
+var slamming  : bool  = false
+var slam_t    : float = 0.0
+var slam_anim : Array = []   # {from: px, to: px, color, seed}
+
 func _ready() -> void:
 	cells.resize(ROWS)
 	seeds.resize(ROWS)
@@ -66,6 +72,14 @@ func _process(delta: float) -> void:
 			clear_t    = 0.0
 		needs_redraw = true
 
+	if slamming:
+		slam_t += delta
+		if slam_t >= SLAM_DUR:
+			slamming  = false
+			slam_anim = []
+			slam_t    = 0.0
+		needs_redraw = true
+
 	# Preview pulse needs continuous redraw while active
 	if not preview_cells.is_empty():
 		needs_redraw = true
@@ -78,6 +92,9 @@ func _process(delta: float) -> void:
 		queue_redraw()
 
 func _draw() -> void:
+	if slamming:
+		_draw_slam()
+		return
 	for r in ROWS:
 		for c in COLS:
 			_draw_cell(r, c)
@@ -403,3 +420,121 @@ func can_any_fit(pieces: Array, placed: Array) -> bool:
 				if can_place(pieces[i], r, c):
 					return true
 	return false
+
+# ── Power abilities ───────────────────────────────────────────────────────────
+# Shared shatter starter: pops the given filled cells (reusing the clear-pop
+# animation + particles), nulls them, and returns how many actually cleared.
+func _start_pop(cell_list: Array, origin: Vector2) -> int:
+	clear_anim  = []
+	clear_total = 0.0
+	var n := 0
+	for cv : Vector2i in cell_list:
+		if cells[cv.y][cv.x] == null:
+			continue
+		var ccol  : Color = cells[cv.y][cv.x]
+		var cseed : int   = seeds[cv.y][cv.x]
+		var delay : float = Vector2(cv.x, cv.y).distance_to(origin) * 0.04
+		clear_total = maxf(clear_total, delay + POP_DUR)
+		var parts : Array = []
+		for i in 5:
+			var ang := (float(i) / 5.0 + float((cv.x * 3 + cv.y * 5 + i) % 7) * 0.02) * TAU
+			parts.append({
+				"dir":  Vector2(cos(ang), sin(ang)),
+				"spd":  26.0 + float((cv.x + cv.y * 2 + i * 3) % 5) * 7.0,
+				"size": 4.0 + float(i % 3) * 2.0,
+			})
+		clear_anim.append({"pos": cv, "color": ccol, "seed": cseed, "delay": delay, "parts": parts})
+		cells[cv.y][cv.x] = null
+		n += 1
+	clear_t  = 0.0
+	clearing = true
+	queue_redraw()
+	return n
+
+# BOMB: shatter a (2*radius+1)² block around (cr,cc). radius 1 = 3×3.
+func bomb_clear(cr: int, cc: int, radius: int) -> int:
+	var cell_list : Array = []
+	for dr in range(-radius, radius + 1):
+		for dc in range(-radius, radius + 1):
+			var r := cr + dr
+			var c := cc + dc
+			if r >= 0 and r < ROWS and c >= 0 and c < COLS:
+				cell_list.append(Vector2i(c, r))
+	return _start_pop(cell_list, Vector2(cc, cr))
+
+# LASER: incinerate every cell in the supplied line (grid coords).
+func laser_clear(cell_list: Array, origin: Vector2) -> int:
+	return _start_pop(cell_list, origin)
+
+# GRAVITY SLAM: compact every block toward `dir` (one of the 4 axes). Commits
+# the new packed board immediately and animates the slide; Game calls
+# check_and_clear() once the slide settles to pop any completed lines.
+func start_slam(dir: Vector2i) -> void:
+	var new_cells : Array = []
+	var new_seeds : Array = []
+	for r in ROWS:
+		var row_c : Array = []; row_c.resize(COLS); row_c.fill(null)
+		var row_s : Array = []; row_s.resize(COLS); row_s.fill(0)
+		new_cells.append(row_c)
+		new_seeds.append(row_s)
+	slam_anim = []
+	if dir.y != 0:
+		for c in COLS:
+			var filled : Array = []
+			for r in ROWS:
+				if cells[r][c] != null:
+					filled.append({"i": r, "color": cells[r][c], "seed": seeds[r][c]})
+			var cnt := filled.size()
+			for i in cnt:
+				var nr : int = (ROWS - cnt + i) if dir.y > 0 else i
+				var item : Dictionary = filled[i]
+				new_cells[nr][c] = item["color"]
+				new_seeds[nr][c] = item["seed"]
+				slam_anim.append({
+					"from": Vector2(c * STEP, int(item["i"]) * STEP),
+					"to":   Vector2(c * STEP, nr * STEP),
+					"color": item["color"], "seed": item["seed"]})
+	else:
+		for r in ROWS:
+			var filled : Array = []
+			for c in COLS:
+				if cells[r][c] != null:
+					filled.append({"i": c, "color": cells[r][c], "seed": seeds[r][c]})
+			var cnt := filled.size()
+			for i in cnt:
+				var nc : int = (COLS - cnt + i) if dir.x > 0 else i
+				var item : Dictionary = filled[i]
+				new_cells[r][nc] = item["color"]
+				new_seeds[r][nc] = item["seed"]
+				slam_anim.append({
+					"from": Vector2(int(item["i"]) * STEP, r * STEP),
+					"to":   Vector2(nc * STEP, r * STEP),
+					"color": item["color"], "seed": item["seed"]})
+	cells = new_cells
+	seeds = new_seeds
+	last_place_center = Vector2(3.5, 3.5)
+	slam_t   = 0.0
+	slamming = true
+	queue_redraw()
+
+# Slide render: empty board with blocks accelerating toward their packed spots.
+func _draw_slam() -> void:
+	for r in ROWS:
+		for c in COLS:
+			var rect := Rect2(c * STEP, r * STEP, CELL, CELL)
+			_rounded_rect(rect, RAD, Color(0.13, 0.11, 0.19))
+			_rounded_outline(rect, RAD, Color(0.24, 0.20, 0.32), 1.0)
+	var k : float = clampf(slam_t / SLAM_DUR, 0.0, 1.0)
+	k = k * k   # accelerate into the wall, like gravity
+	for sa in slam_anim:
+		var from_p : Vector2 = sa["from"]
+		var to_p   : Vector2 = sa["to"]
+		var p := from_p.lerp(to_p, k)
+		# motion streak for fast movers
+		var travel := from_p.distance_to(to_p)
+		if travel > STEP * 0.5 and k > 0.05 and k < 0.98:
+			var trail := p.lerp(from_p, 0.35)
+			_rounded_rect(Rect2(trail, Vector2(CELL, CELL)),
+				RAD, Color(sa["color"].r, sa["color"].g, sa["color"].b, 0.18))
+		var rect := Rect2(p, Vector2(CELL, CELL))
+		_draw_block(rect, sa["color"], sa["seed"], 0.0, rect)

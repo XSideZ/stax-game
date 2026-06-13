@@ -228,6 +228,7 @@ var save_placements    : int    = 0
 var save_max_combo     : int    = 0
 var save_board_clears  : int    = 0
 var save_seeds         : Array  = []   # per-cell skin pattern seeds
+var save_meter         : float  = 0.0  # power-meter charge (0..1)
 
 const SAVE_PATH  := "user://stax_save.dat"
 const RUN_PATH   := "user://stax_run.dat"
@@ -310,7 +311,7 @@ func set_theme(i: int) -> void:
 
 func snapshot(cells: Array, sc: int, pcs: Array, pl: Array,
 			  sg: int, lc: int, ti: int, cb: int, pm: int = 0,
-			  mc: int = 0, bc: int = 0, sd: Array = []) -> void:
+			  mc: int = 0, bc: int = 0, sd: Array = [], mt: float = 0.0) -> void:
 	has_save           = true
 	save_cells         = cells.duplicate(true)
 	save_score         = sc
@@ -324,6 +325,7 @@ func snapshot(cells: Array, sc: int, pcs: Array, pl: Array,
 	save_max_combo     = mc
 	save_board_clears  = bc
 	save_seeds         = sd.duplicate(true)
+	save_meter         = mt
 
 # ── Run persistence (auto-save until the player loses) ───────────────────────
 func save_run_to_disk() -> void:
@@ -342,6 +344,7 @@ func save_run_to_disk() -> void:
 	f.store_var(save_board_clears)
 	f.store_var(revive_used)
 	f.store_var(save_seeds)
+	f.store_var(save_meter)
 	f.close()
 
 func has_run_save() -> bool:
@@ -366,6 +369,7 @@ func load_run_from_disk() -> bool:
 	save_board_clears = f.get_var() if f.get_position() < f.get_length() else 0
 	revive_used       = f.get_var() if f.get_position() < f.get_length() else false
 	save_seeds        = f.get_var() if f.get_position() < f.get_length() else []
+	save_meter        = f.get_var() if f.get_position() < f.get_length() else 0.0
 	f.close()
 	save_theme_idx = theme_idx
 	has_save       = true
