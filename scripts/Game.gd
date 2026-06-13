@@ -43,6 +43,11 @@ const SHAPES: Array = [
 	[[1,0],[0,1]],
 	[[0,0],[1,1],[2,2]],
 	[[2,0],[1,1],[0,2]],
+	# Big corner "L" — two 3-long arms sharing a corner (5 cells), all 4 rotations
+	[[0,0],[0,1],[0,2],[1,2],[2,2]],
+	[[0,0],[1,0],[2,0],[0,1],[0,2]],
+	[[0,0],[1,0],[2,0],[2,1],[2,2]],
+	[[2,0],[2,1],[0,2],[1,2],[2,2]],
 ]
 
 const COLORS: Array = [
@@ -141,6 +146,13 @@ var power_busy  : bool  = false   # an ability animation is playing
 var power_pulse : float = 0.0     # orb flash right after firing
 var fx_layer    : Node2D          # top layer for bomb/laser/gravity effects
 var effects     : Array = []      # active visual effects
+
+# Drag-hover haptic: buzz once each time we move onto a new valid placement
+var last_hover_snap  : Vector2i = Vector2i(-99, -99)
+var last_hover_valid : bool     = false
+
+# Score count-up: the label chases the real score so it flies up instead of jumping
+var disp_score : float = 0.0
 
 # Theme / background
 var theme_idx     : int    = 0
@@ -279,6 +291,13 @@ func _process(delta: float) -> void:
 		fx_layer.queue_redraw()
 	if power_pulse > 0.0:
 		power_pulse = maxf(power_pulse - delta * 2.0, 0.0)
+
+	# Score count-up: the displayed number flies toward the real score
+	if disp_score != float(score):
+		disp_score = lerpf(disp_score, float(score), clampf(delta * 14.0, 0.0, 1.0))
+		if absf(float(score) - disp_score) < 1.0:
+			disp_score = float(score)
+		score_label.text = str(int(round(disp_score)))
 
 	queue_redraw()
 	drag_layer.queue_redraw()
@@ -508,6 +527,7 @@ func _restore_state() -> void:
 	pieces = GameState.save_pieces.duplicate(true)
 	placed = GameState.save_placed.duplicate()
 
+	disp_score = float(score)   # show restored score instantly, no count-up
 	score_label.text = str(score)
 	_update_combo_label()
 	grid.queue_redraw()
@@ -561,6 +581,7 @@ func _start_drag(pos: Vector2) -> void:
 		dragging_slot = slot
 		drag_pos      = pos
 		drag_pop_t    = 1.0
+		last_hover_valid = false   # so the first valid hover this drag ticks
 		Sfx.play_pickup()
 		queue_redraw()
 
@@ -619,7 +640,6 @@ func _end_drag(pos: Vector2) -> void:
 			_show_board_clear_popup()
 
 		score += gained
-		score_label.text = str(score)
 		GameState.submit_score(score)
 		_check_achievements(lines)
 		_refresh_best()
@@ -793,7 +813,6 @@ func _award_power_clear(cells_cleared: int, lines: int) -> void:
 		Sfx.play_board_clear()
 		_show_board_clear_popup()
 	score += pts
-	score_label.text = str(score)
 	GameState.submit_score(score)
 	lines_cleared += lines
 	_check_achievements(lines)
@@ -872,8 +891,14 @@ func _update_ghost() -> void:
 	var snap  : Vector2i = _get_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
 	if grid.can_place(shape, snap.y, snap.x):
 		grid.set_ghost(shape, snap.y, snap.x, pieces[dragging_slot].color)
+		# Light tick each time the shadow lands on a NEW valid spot
+		if not last_hover_valid or snap != last_hover_snap:
+			_buzz(8)
+		last_hover_valid = true
+		last_hover_snap  = snap
 	else:
 		grid.clear_ghost()
+		last_hover_valid = false
 
 func _get_snap(pos: Vector2, shape: Array) -> Vector2i:
 	var min_c := 99; var max_c := 0
@@ -1532,26 +1557,17 @@ func _draw_drag_layer() -> void:
 	var lifted := drag_pos + Vector2(0, -DRAG_LIFT)
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
-	var snap  : Vector2i = _get_snap(lifted, shape)
-	# Only lock to the grid when the placement is actually valid — otherwise the
-	# piece follows the finger freely, so it cleanly snaps in only where it fits.
-	var valid : bool     = _is_over_grid(lifted) and grid.can_place(shape, snap.y, snap.x)
 
-	var ox : float
-	var oy : float
-
-	if valid:
-		ox = GRID_X + snap.x * GRID_STEP
-		oy = GRID_Y + snap.y * GRID_STEP
-	else:
-		var min_c := 99; var max_c := 0; var min_r := 99; var max_r := 0
-		for cell in shape:
-			if (cell[0] as int) < min_c: min_c = cell[0]
-			if (cell[0] as int) > max_c: max_c = cell[0]
-			if (cell[1] as int) < min_r: min_r = cell[1]
-			if (cell[1] as int) > max_r: max_r = cell[1]
-		ox = lifted.x - (max_c - min_c + 1) * GRID_STEP * 0.5 - min_c * GRID_STEP
-		oy = lifted.y - (max_r - min_r + 1) * GRID_STEP * 0.5 - min_r * GRID_STEP
+	# The dragged piece ALWAYS follows the finger freely (never grid-snaps) — the
+	# snappy board ghost is the precise "this is where it lands" shadow instead.
+	var min_c := 99; var max_c := 0; var min_r := 99; var max_r := 0
+	for cell in shape:
+		if (cell[0] as int) < min_c: min_c = cell[0]
+		if (cell[0] as int) > max_c: max_c = cell[0]
+		if (cell[1] as int) < min_r: min_r = cell[1]
+		if (cell[1] as int) > max_r: max_r = cell[1]
+	var ox : float = lifted.x - (max_c - min_c + 1) * GRID_STEP * 0.5 - min_c * GRID_STEP
+	var oy : float = lifted.y - (max_r - min_r + 1) * GRID_STEP * 0.5 - min_r * GRID_STEP
 
 	var draw_color : Color = color
 
