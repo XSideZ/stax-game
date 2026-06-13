@@ -107,7 +107,7 @@ const DRAG_LIFT := 70.0
 const METER_BOMB     := 0.25
 const METER_LASER    := 0.50
 const METER_FULL     := 1.0
-const METER_PER_LINE := 0.05    # charge gained per line cleared
+const METER_PER_LINE := 0.06    # charge gained per line cleared
 const POWER_CENTER   := Vector2(50.0, 70.0)
 const POWER_R        := 30.0
 
@@ -144,6 +144,7 @@ var drag_pop_t    : float   = 0.0    # pickup swell on the dragged piece
 var meter       : float = 0.0     # charge 0..1
 var power_busy  : bool  = false   # an ability animation is playing
 var power_pulse : float = 0.0     # orb flash right after firing
+var last_power_tier : int = 0     # detect crossing into a new ability tier
 var fx_layer    : Node2D          # top layer for bomb/laser/gravity effects
 var effects     : Array = []      # active visual effects
 
@@ -291,6 +292,14 @@ func _process(delta: float) -> void:
 		fx_layer.queue_redraw()
 	if power_pulse > 0.0:
 		power_pulse = maxf(power_pulse - delta * 2.0, 0.0)
+
+	# Crossing into a new ability tier flashes the orb to draw the eye
+	var tier := _power_tier()
+	if tier > last_power_tier:
+		power_pulse = 1.0
+		Sfx.play_tick()
+		_buzz(10 + tier * 6)
+	last_power_tier = tier
 
 	# Score count-up: the displayed number flies toward the real score
 	if disp_score != float(score):
@@ -591,7 +600,7 @@ func _end_drag(pos: Vector2) -> void:
 	var lifted := pos + Vector2(0, -DRAG_LIFT)
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
-	var snap  : Vector2i = _get_snap(lifted, shape)
+	var snap  : Vector2i = _best_snap(lifted, shape)
 
 	if grid.can_place(shape, snap.y, snap.x):
 		grid.place(shape, snap.y, snap.x, color, pieces[dragging_slot].get("pattern", 0))
@@ -719,8 +728,8 @@ func _power_bomb() -> void:
 	Sfx.play_pickup()
 	await get_tree().create_timer(0.42).timeout
 	effects.append({"type": "bomb_blast", "t": 0.0, "dur": 0.65, "pos": sp})
-	shake_t   = maxf(shake_t, 0.35)
-	flash_t   = maxf(flash_t, 0.5)
+	shake_t   = maxf(shake_t, 0.45)
+	flash_t   = maxf(flash_t, 0.6)
 	flash_col = Color(1.0, 0.7, 0.3, 1.0)
 	_buzz(60)
 	Sfx.play_board_clear()
@@ -767,7 +776,7 @@ func _power_laser() -> void:
 	fx_layer.queue_redraw()
 	await get_tree().create_timer(0.30).timeout
 	effects.append({"type": "laser_fire", "t": 0.0, "dur": 0.5, "a": a, "b": b, "color": lcol})
-	shake_t   = maxf(shake_t, 0.22)
+	shake_t   = maxf(shake_t, 0.30)
 	flash_t   = maxf(flash_t, 0.35)
 	flash_col = Color(0.6, 0.95, 1.0, 1.0)
 	_buzz(45)
@@ -789,7 +798,7 @@ func _power_gravity() -> void:
 	Sfx.play_combo(4)
 	grid.start_slam(dir)
 	await get_tree().create_timer(Grid.SLAM_DUR + 0.04).timeout
-	shake_t = maxf(shake_t, 0.55)
+	shake_t = maxf(shake_t, 0.65)
 	_buzz(120)
 	Sfx.play_board_clear()
 	var cleared := grid.check_and_clear()
@@ -888,7 +897,7 @@ func _update_ghost() -> void:
 	if dragging_slot < 0 or placed[dragging_slot]:
 		return
 	var shape : Array    = pieces[dragging_slot].shape
-	var snap  : Vector2i = _get_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
+	var snap  : Vector2i = _best_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
 	if grid.can_place(shape, snap.y, snap.x):
 		grid.set_ghost(shape, snap.y, snap.x, pieces[dragging_slot].color)
 		# Light tick each time the shadow lands on a NEW valid spot
@@ -913,6 +922,23 @@ func _get_snap(pos: Vector2, shape: Array) -> Vector2i:
 		gc.x - roundi((min_c + max_c) / 2.0),
 		gc.y - roundi((min_r + max_r) / 2.0)
 	)
+
+# Generous snap: if the raw cell isn't placeable, fall to the nearest placeable
+# spot within ±1 cell so the shadow forgives near-misses.
+func _best_snap(pos: Vector2, shape: Array) -> Vector2i:
+	var base := _get_snap(pos, shape)
+	if grid.can_place(shape, base.y, base.x):
+		return base
+	var best := base
+	var best_d := 99.0
+	for dr in range(-1, 2):
+		for dc in range(-1, 2):
+			if grid.can_place(shape, base.y + dr, base.x + dc):
+				var d := Vector2(dc, dr).length()
+				if d < best_d:
+					best_d = d
+					best = Vector2i(base.x + dc, base.y + dr)
+	return best
 
 func _screen_to_grid(pos: Vector2) -> Vector2i:
 	return Vector2i(
@@ -1629,24 +1655,35 @@ func _draw_gear_button() -> void:
 		draw_line(c + Vector2(cos(a), sin(a)) * 9.0, c + Vector2(cos(a), sin(a)) * 13.0, gear_col, 3.0)
 
 # ── Power orb (charge meter + spend button) ──────────────────────────────────
+func _power_tier() -> int:
+	if meter >= METER_FULL:    return 3
+	elif meter >= METER_LASER: return 2
+	elif meter >= METER_BOMB:  return 1
+	return 0
+
 func _draw_power_orb() -> void:
 	var c := POWER_CENTER
 	var usable := meter >= METER_BOMB
-	var tier := 0
-	if meter >= METER_FULL:    tier = 3
-	elif meter >= METER_LASER: tier = 2
-	elif meter >= METER_BOMB:  tier = 1
+	var tier := _power_tier()
 	var tcol : Color
 	match tier:
 		3: tcol = Color(1.0, 0.85, 0.30)
 		2: tcol = Color(0.45, 0.92, 1.0)
 		1: tcol = Color(1.0, 0.58, 0.20)
 		_: tcol = Color(0.55, 0.55, 0.68)
-	var pulse := (sin(Time.get_ticks_msec() * 0.006) + 1.0) * 0.5
-	# Ready glow
+	# Pulse gets faster + stronger the higher the tier, to pull the eye
+	var pulse := (sin(Time.get_ticks_msec() * (0.005 + float(tier) * 0.004)) + 1.0) * 0.5
+	# Ready glow — escalates bomb → laser → ultimate
 	if usable:
-		var ga := 0.10 + 0.10 * pulse + power_pulse * 0.45
-		draw_circle(c, POWER_R + 8.0 + pulse * 3.0, Color(tcol.r, tcol.g, tcol.b, ga))
+		var base_glow := 0.12 + float(tier) * 0.09
+		var ga := base_glow * (0.45 + 0.55 * pulse) + power_pulse * 0.55
+		draw_circle(c, POWER_R + 8.0 + pulse * (3.0 + float(tier) * 3.0),
+			Color(tcol.r, tcol.g, tcol.b, ga))
+		# Extra halo for laser, a sparkling ring for the ultimate
+		if tier >= 2:
+			draw_circle(c, POWER_R + 15.0 + pulse * 6.0, Color(tcol.r, tcol.g, tcol.b, 0.12 * pulse))
+		if tier >= 3:
+			draw_arc(c, POWER_R + 19.0 + pulse * 3.0, 0, TAU, 36, Color(1, 1, 1, 0.30 * pulse), 2.0, true)
 	# Base disc
 	draw_circle(c, POWER_R, Color(0.08, 0.07, 0.13, 0.92))
 	# Meter track + fill
@@ -1662,7 +1699,9 @@ func _draw_power_orb() -> void:
 	# Rim
 	draw_arc(c, POWER_R, 0, TAU, 40, Color(tcol.r, tcol.g, tcol.b, 0.6 if usable else 0.25), 2.0, true)
 	# Icon for the ability the meter currently affords
-	_draw_power_icon(c, tier, Color(1, 1, 1, 0.92) if usable else Color(1, 1, 1, 0.35), pulse)
+	# Icon flashes harder the higher the tier (plus the one-shot tier-up flash)
+	var icon_pulse : float = clampf(pulse * (1.0 + float(tier) * 0.4) + power_pulse * 0.6, 0.0, 1.6)
+	_draw_power_icon(c, tier, Color(1, 1, 1, 0.92) if usable else Color(1, 1, 1, 0.35), icon_pulse)
 
 func _draw_power_icon(c: Vector2, tier: int, icol: Color, pulse: float) -> void:
 	match tier:
@@ -1754,6 +1793,16 @@ func _fx_bomb_blast(e: Dictionary, p: float) -> void:
 		var sma := float(i) / 4.0 * TAU + 0.5
 		fx_layer.draw_circle(c + Vector2(cos(sma), sin(sma)) * lerpf(0.0, 30.0, p),
 			lerpf(4.0, 16.0, p), Color(0.5, 0.45, 0.45, (1.0 - p) * 0.18))
+	# Debris chunks blown out then dragged down by gravity
+	for i in 8:
+		var da := float(i) / 8.0 * TAU + 0.3
+		var out := Vector2(cos(da), -0.6 - float(i % 3) * 0.25) * (45.0 + float(i % 4) * 16.0)
+		var dp := c + out * p + Vector2(0, 150.0 * p * p)   # parabolic fall
+		var dsz := (1.0 - p * 0.7) * (5.0 + float(i % 3) * 2.0)
+		if dsz > 1.0:
+			var dcol := Color(1.0, 0.55, 0.20).lerp(Color(0.45, 0.28, 0.20), p)
+			fx_layer.draw_rect(Rect2(dp - Vector2(dsz, dsz) * 0.5, Vector2(dsz, dsz)),
+				Color(dcol.r, dcol.g, dcol.b, 1.0 - p), true)
 
 func _fx_laser_charge(e: Dictionary, p: float) -> void:
 	var a : Vector2 = e["a"]
@@ -1785,6 +1834,16 @@ func _fx_laser_fire(e: Dictionary, p: float) -> void:
 		var on := a.lerp(b, float(i) / 9.0)
 		var jit := perp * sin(e["t"] * 30.0 + float(i)) * 6.0 * fade
 		fx_layer.draw_circle(on + jit, fade * (1.5 + float(i % 3)), Color(1.0, 1.0, 0.9, fade * 0.8))
+	# Flame licks rising off the burn line, flickering hot→cool
+	for i in 14:
+		var f := float(i) / 13.0
+		var on := a.lerp(b, f)
+		var rise := 8.0 + 22.0 * (1.0 - p)
+		var fl := on + Vector2(sin(e["t"] * 22.0 + float(i) * 1.7) * 5.0, -rise)
+		var fsz := fade * (2.0 + float(i % 3) * 1.5)
+		if fsz > 0.4:
+			fx_layer.draw_circle(fl, fsz, Color(1.0, lerpf(0.75, 0.25, f), 0.12, fade * 0.55))
+			fx_layer.draw_circle(on + Vector2(0, -rise * 0.4), fsz * 0.6, Color(1.0, 0.9, 0.4, fade * 0.6))
 
 func _fx_gravity(e: Dictionary, p: float) -> void:
 	var move : Vector2 = e["dir"]
@@ -1823,6 +1882,20 @@ func _fx_gravity(e: Dictionary, p: float) -> void:
 			fx_layer.draw_line(Vector2(board.end.x, board.position.y), board.end, ec, w)
 		else:
 			fx_layer.draw_line(board.position, Vector2(board.position.x, board.end.y), ec, w)
+	# Impact dust kicking up along the slammed edge
+	if p > 0.45 and p < 0.92:
+		var dimp := 1.0 - (p - 0.45) / 0.47
+		var grow := (1.0 - dimp) * 16.0 + 3.0
+		for i in 8:
+			var f := (float(i) + 0.5) / 8.0
+			var pp : Vector2
+			if move.y != 0.0:
+				var ey := board.end.y if move.y > 0.0 else board.position.y
+				pp = Vector2(board.position.x + f * board.size.x, ey)
+			else:
+				var ex := board.end.x if move.x > 0.0 else board.position.x
+				pp = Vector2(ex, board.position.y + f * board.size.y)
+			fx_layer.draw_circle(pp, grow, Color(0.92, 0.88, 0.74, dimp * 0.20))
 
 # ── Block style renderer — all skins live in BlockSkins.gd (shared) ─────────
 func _draw_styled_block(r: Rect2, col: Color, seed_v: int = 0) -> void:

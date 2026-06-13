@@ -860,9 +860,73 @@ func _build_buttons() -> void:
 	play_pulse.tween_property(primary, "scale", Vector2.ONE, 0.45).set_trans(Tween.TRANS_SINE)
 
 func _on_play_pressed(play: Button) -> void:
+	# A saved run exists → confirm before wiping it
+	if GameState.has_run_save():
+		_confirm_new_game(play)
+		return
 	GameState.has_save = false
 	GameState.clear_run()
 	_launch(play)
+
+func _confirm_new_game(play: Button) -> void:
+	Sfx.play_click()
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.size = Vector2(414, 896)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(dim)
+
+	var box := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.11, 0.19, 0.99)
+	sb.set_corner_radius_all(20)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(1, 1, 1, 0.12)
+	sb.content_margin_left = 22; sb.content_margin_right = 22
+	sb.content_margin_top = 22;  sb.content_margin_bottom = 22
+	box.add_theme_stylebox_override("panel", sb)
+	box.custom_minimum_size = Vector2(322, 0)
+	box.position = Vector2(46, 330)
+	dim.add_child(box)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	box.add_child(vb)
+
+	var title := Label.new()
+	title.text = "START NEW GAME?"
+	title.add_theme_font_size_override("font_size", 26)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+
+	var msg := Label.new()
+	msg.text = "Your saved run will be lost."
+	msg.add_theme_font_size_override("font_size", 17)
+	msg.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(msg)
+
+	var yes := _make_chunky_button("NEW GAME", Color(0.90, 0.35, 0.35), 22)
+	yes.custom_minimum_size = Vector2(278, 56)
+	vb.add_child(yes)
+	var no := _make_chunky_button("KEEP PLAYING", Color(0.20, 0.75, 0.95), 22)
+	no.custom_minimum_size = Vector2(278, 56)
+	vb.add_child(no)
+
+	box.modulate.a = 0.0
+	box.scale = Vector2(0.9, 0.9)
+	box.pivot_offset = Vector2(161, 120)
+	var t := create_tween()
+	t.tween_property(box, "modulate:a", 1.0, 0.15)
+	t.parallel().tween_property(box, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	yes.pressed.connect(func():
+		GameState.has_save = false
+		GameState.clear_run()
+		_launch(play))
+	no.pressed.connect(func():
+		Sfx.play_click()
+		dim.queue_free())
 
 func _on_continue_pressed(cont: Button) -> void:
 	if not GameState.load_run_from_disk():
