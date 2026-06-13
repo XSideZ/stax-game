@@ -38,6 +38,11 @@ const SHAPES: Array = [
 	# Filled 2×3 and 3×2 rectangles
 	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]],
 	[[0,0],[1,0],[0,1],[1,1],[0,2],[1,2]],
+	# Diagonals (2- and 3-cell, both directions) — tricky, show up more late-game
+	[[0,0],[1,1]],
+	[[1,0],[0,1]],
+	[[0,0],[1,1],[2,2]],
+	[[2,0],[1,1],[0,2]],
 ]
 
 const COLORS: Array = [
@@ -717,11 +722,8 @@ func _pos_to_slot(pos: Vector2) -> int:
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 func _advance_theme() -> void:
-	# Random next theme (never repeats current, never the secret cat) — AUTO stays fresh
-	var nxt := theme_idx
-	while nxt == theme_idx:
-		nxt = randi() % GameState.CAT_SKIN   # 0..19
-	theme_idx  = nxt
+	# AUTO cycles through every unlocked skin (shuffle bag) before any repeats
+	theme_idx = GameState.next_auto_theme(theme_idx)
 	GameState.set_theme(theme_idx)
 	# Skin override active: progression still ticks, but visuals stay locked
 	if GameState.dev_skin_override >= 0:
@@ -1299,13 +1301,14 @@ func _draw_drag_layer() -> void:
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
 	var snap  : Vector2i = _get_snap(lifted, shape)
-	var over  : bool     = _is_over_grid(lifted)
-	var valid : bool     = over and grid.can_place(shape, snap.y, snap.x)
+	# Only lock to the grid when the placement is actually valid — otherwise the
+	# piece follows the finger freely, so it cleanly snaps in only where it fits.
+	var valid : bool     = _is_over_grid(lifted) and grid.can_place(shape, snap.y, snap.x)
 
 	var ox : float
 	var oy : float
 
-	if over:
+	if valid:
 		ox = GRID_X + snap.x * GRID_STEP
 		oy = GRID_Y + snap.y * GRID_STEP
 	else:
@@ -1318,7 +1321,7 @@ func _draw_drag_layer() -> void:
 		ox = lifted.x - (max_c - min_c + 1) * GRID_STEP * 0.5 - min_c * GRID_STEP
 		oy = lifted.y - (max_r - min_r + 1) * GRID_STEP * 0.5 - min_r * GRID_STEP
 
-	var draw_color : Color = color if (valid or not over) else Color(0.9, 0.2, 0.2, 0.7)
+	var draw_color : Color = color
 
 	# Pickup pop: piece swells briefly when grabbed
 	var pop := 1.0 + sin(drag_pop_t * PI) * 0.10

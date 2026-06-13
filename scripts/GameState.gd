@@ -15,6 +15,10 @@ var revive_used : bool = false
 # Dev skin changer (main-menu picker, session-only): -1 = follow the theme
 var dev_skin_override : int = -1
 
+# AUTO-mode skin cycling uses a shuffle bag: every unlocked skin appears once
+# before any repeats. Persisted so the cycle carries across runs.
+var theme_bag : Array = []
+
 # ── Secret cat skin (easter egg: tap S-T-A-X on the title in order) ───────────
 # CAT is the last THEMES entry; the random theme rotation only uses 0..CAT_SKIN-1
 # so it never appears by chance. cat_mode forces it on everywhere, and persists.
@@ -32,6 +36,26 @@ func active_skin(theme_i: int) -> int:
 func set_cat_mode(on: bool) -> void:
 	cat_mode = on
 	_save()
+
+# Skins available for AUTO rotation. TODO: filter to the player's unlocked set
+# once level/achievement gating exists; for now every non-cat skin is available.
+func unlocked_skins() -> Array:
+	var pool : Array = []
+	for i in CAT_SKIN:   # 0 .. CAT_SKIN-1, never the secret cat
+		pool.append(i)
+	return pool
+
+# Next AUTO skin via a shuffle bag: returns each unlocked skin once before any
+# repeat. Refills + reshuffles when empty, avoiding an immediate repeat.
+func next_auto_theme(current: int) -> int:
+	if theme_bag.is_empty():
+		theme_bag = unlocked_skins()
+		theme_bag.shuffle()
+		if theme_bag.size() > 1 and int(theme_bag[0]) == current:
+			theme_bag.push_back(theme_bag.pop_front())
+	var nxt : int = int(theme_bag.pop_front())
+	_save()
+	return nxt
 
 # ── Player profile / XP ───────────────────────────────────────────────────────
 # Level curve: cost(level→level+1) = 20 + 0.28·level². Total to hit MAX_LEVEL
@@ -378,6 +402,7 @@ func _save() -> void:
 	f.store_var(stat_best_multi)
 	f.store_var(stat_revives)
 	f.store_var(cat_mode)
+	f.store_var(theme_bag)
 	f.close()
 
 func _load() -> void:
@@ -423,4 +448,6 @@ func _load() -> void:
 		stat_revives = f.get_var()
 	if f.get_position() < f.get_length():
 		cat_mode = f.get_var()
+	if f.get_position() < f.get_length():
+		theme_bag = f.get_var()
 	f.close()
