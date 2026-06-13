@@ -6,34 +6,52 @@ const ROWS := 8
 const CELL := 44.0
 const GAP  := 2.0
 const STEP := CELL + GAP
+const RAD  := 7.0    # corner radius for the bubbly look
 
 var cells       : Array = []
+var seeds       : Array = []   # per-cell skin pattern seed — each piece is a
+							   # random "crop" of the skin canvas (CSGO style)
 var ghost_cells : Array[Vector2i] = []
 var ghost_color := Color.TRANSPARENT
 var block_style : int = 0   # set by Game.gd on theme change
 
+# Clear-preview: cells of any row/col that would complete at the ghost position
+var preview_cells : Array[Vector2i] = []
+var preview_color := Color.TRANSPARENT
+
 var last_lines_cleared : int = 0
 
-const CLEAR_DUR := 0.55
-var clear_cells : Array[Vector2i] = []
+# Clear pop animation: per-cell colour, cascade delay and burst particles
+const POP_DUR   := 0.38
+var clear_anim  : Array = []
 var clear_t     : float = 0.0
+var clear_total : float = 0.0
 var clearing    : bool  = false
 
+# Placement squash & stretch
+const PLACE_DUR := 0.30
 var place_anim  : Array = []
+
+var last_place_center := Vector2.ZERO
 
 func _ready() -> void:
 	cells.resize(ROWS)
+	seeds.resize(ROWS)
 	for r in ROWS:
 		cells[r] = []
 		cells[r].resize(COLS)
 		cells[r].fill(null)
+		seeds[r] = []
+		seeds[r].resize(COLS)
+		for c in COLS:
+			seeds[r][c] = r * 7 + c * 13
 
 func _process(delta: float) -> void:
 	var needs_redraw := false
 
 	var done: Array = []
 	for pa in place_anim:
-		pa["t"] += delta / 0.22
+		pa["t"] += delta / PLACE_DUR
 		if pa["t"] >= 1.0:
 			done.append(pa)
 		needs_redraw = true
@@ -41,11 +59,19 @@ func _process(delta: float) -> void:
 		place_anim.erase(pa)
 
 	if clearing:
-		clear_t += delta / CLEAR_DUR
-		if clear_t >= 1.0:
-			clearing    = false
-			clear_cells = []
-			clear_t     = 0.0
+		clear_t += delta
+		if clear_t >= clear_total:
+			clearing   = false
+			clear_anim = []
+			clear_t    = 0.0
+		needs_redraw = true
+
+	# Preview pulse needs continuous redraw while active
+	if not preview_cells.is_empty():
+		needs_redraw = true
+
+	# Animated skins (water/lava/galaxy) live-update
+	if BlockSkins.ANIMATED.has(block_style):
 		needs_redraw = true
 
 	if needs_redraw:
@@ -55,147 +81,153 @@ func _draw() -> void:
 	for r in ROWS:
 		for c in COLS:
 			_draw_cell(r, c)
+	# Drips (honey/slime) hang below blocks — painted after ALL cells so the
+	# row beneath doesn't cover them
+	if BlockSkins.OVERLAY_STYLES.has(block_style):
+		for r in ROWS:
+			for c in COLS:
+				if cells[r][c] != null:
+					BlockSkins.paint_overlay(self, block_style,
+						Rect2(c * STEP, r * STEP, CELL, CELL), cells[r][c], seeds[r][c])
 	if clearing:
-		_draw_clear_flash()
+		_draw_clear_pop()
 
 func _draw_cell(r: int, c: int) -> void:
 	var rect := Rect2(c * STEP, r * STEP, CELL, CELL)
 	var col  : Color = cells[r][c] if cells[r][c] != null else Color.TRANSPARENT
 	var gv   := Vector2i(c, r)
 
+	var pulse := (sin(Time.get_ticks_msec() * 0.012) + 1.0) * 0.5
+	var in_preview := preview_cells.has(gv)
+
 	if col == Color.TRANSPARENT:
 		if ghost_cells.has(gv):
-			draw_rect(rect, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.30), true)
-			draw_rect(rect, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.65), false, 1.5)
+			var ga := 0.42 if in_preview else 0.30
+			_rounded_rect(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, ga))
+			_rounded_outline(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.75), 1.5)
 		else:
-			draw_rect(rect, Color(0.10, 0.08, 0.15), true)
-			draw_rect(rect, Color(0.18, 0.14, 0.24), false, 1.0)
+			_rounded_rect(rect, RAD, Color(0.13, 0.11, 0.19))
+			_rounded_outline(rect, RAD, Color(0.24, 0.20, 0.32), 1.0)
 		return
 
-	var scale := 1.0
+	# Filled cell that's part of a line about to clear: tint toward the
+	# dragged piece's colour + pulsing bright border
+	if in_preview:
+		col = col.lerp(preview_color.lightened(0.25), 0.55 + pulse * 0.20)
+
+	var sc := Vector2.ONE
 	for pa in place_anim:
 		if pa["r"] == r and pa["c"] == c:
-			scale = 1.0 + sin(pa["t"] * PI) * 0.18
+			sc = _squash_scale(clampf(pa["t"], 0.0, 1.0))
 			break
 
 	var drv := rect
-	if scale != 1.0:
-		drv = rect.grow(CELL * (scale - 1.0) * 0.5)
+	if sc != Vector2.ONE:
+		var center := rect.get_center()
+		var size   := Vector2(CELL * sc.x, CELL * sc.y)
+		drv = Rect2(center - size * 0.5, size)
 
-	match block_style:
-		0: _draw_pastel(drv, col)
-		1: _draw_neon(drv, col)
-		2: _draw_circuit(drv, col)
-		3: _draw_brick(drv, col)
-		4: _draw_crystal(drv, col)
+	# Steady glow with only a gentle breathe — a full-range pulse reads as flashing
+	_draw_block(drv, col, seeds[r][c], (0.82 + pulse * 0.18) if in_preview else 0.0, rect)
 
-	if scale > 1.02:
-		var glow_a := (scale - 1.0) / 0.18 * 0.5
-		draw_rect(drv.grow(4), Color(col.r, col.g, col.b, glow_a), false, 3.0)
+	if in_preview:
+		_rounded_outline(drv.grow(1.0), RAD + 1.0, Color(1, 1, 1, 0.45 + pulse * 0.45), 2.5)
 
-# ── Block style: PASTEL ───────────────────────────────────────────────────────
-# Soft candy-like blocks, lighter fills, gentle bevels
-func _draw_pastel(r: Rect2, col: Color) -> void:
-	draw_rect(Rect2(r.position + Vector2(1.5, 1.5), r.size + Vector2(3.0, 3.0)), Color(0, 0, 0, 0.18), true)
-	draw_rect(r, col.lightened(0.28), true)
-	draw_rect(Rect2(r.position, Vector2(r.size.x, 5)), col.lightened(0.65), true)
-	draw_rect(Rect2(r.position, Vector2(5, r.size.y)), col.lightened(0.65), true)
-	draw_rect(Rect2(r.position + Vector2(0, r.size.y - 4), Vector2(r.size.x, 4)), col.darkened(0.12), true)
-	draw_rect(Rect2(r.position + Vector2(r.size.x - 4, 0), Vector2(4, r.size.y)), col.darkened(0.12), true)
-	# Soft shine dot in top-left quadrant
-	draw_rect(Rect2(r.position + r.size * 0.18, Vector2(7, 7)), col.lightened(0.80), true)
+	if sc.x > 1.05:
+		var glow_a := (sc.x - 1.0) / 0.30 * 0.5
+		_rounded_outline(drv.grow(4), RAD + 3.0, Color(col.r, col.g, col.b, glow_a), 3.0)
 
-# ── Block style: NEON ─────────────────────────────────────────────────────────
-# Nearly black fill, glowing coloured border + bloom layers
-func _draw_neon(r: Rect2, col: Color) -> void:
-	draw_rect(r.grow(8), Color(col.r, col.g, col.b, 0.05), true)
-	draw_rect(r.grow(4), Color(col.r, col.g, col.b, 0.12), true)
-	draw_rect(r.grow(2), Color(col.r, col.g, col.b, 0.22), true)
-	draw_rect(r, col.darkened(0.82), true)
-	draw_rect(r, col, false, 2.0)
-	draw_rect(r.grow(-2), Color(col.r, col.g, col.b, 0.28), false, 1.0)
-	# Corner glow dot
-	draw_rect(Rect2(r.position + Vector2(4, 4), Vector2(5, 5)), col.lightened(0.45), true)
+# All skin rendering lives in BlockSkins.gd (shared with tray + menus).
+# pr = the cell's resting rect, so canvas-continuous patterns hold steady
+# while the squash/stretch animation plays.
+func _draw_block(r: Rect2, col: Color, seed_v: int = 0, glow: float = 0.0, pr: Rect2 = Rect2()) -> void:
+	BlockSkins.paint(self, block_style, r, col, seed_v, glow, pr, false)   # overlay drawn in a later pass
 
-# ── Block style: CIRCUIT ──────────────────────────────────────────────────────
-# Dark fill with PCB trace lines and node dots
-func _draw_circuit(r: Rect2, col: Color) -> void:
-	draw_rect(Rect2(r.position + Vector2(2, 2), r.size + Vector2(4, 4)), Color(0, 0, 0, 0.40), true)
-	draw_rect(r, col.darkened(0.32), true)
-	draw_rect(Rect2(r.position, Vector2(r.size.x, 4)), col.lightened(0.38), true)
-	draw_rect(Rect2(r.position, Vector2(4, r.size.y)), col.lightened(0.38), true)
-	draw_rect(Rect2(r.position + Vector2(0, r.size.y - 3), Vector2(r.size.x, 3)), col.darkened(0.52), true)
-	draw_rect(Rect2(r.position + Vector2(r.size.x - 3, 0), Vector2(3, r.size.y)), col.darkened(0.52), true)
-	var lc  := Color(col.r, col.g, col.b, 0.55)
-	var y1  := r.position.y + r.size.y * 0.38
-	var y2  := r.position.y + r.size.y * 0.65
-	var x1  := r.position.x + r.size.x * 0.40
-	draw_line(Vector2(r.position.x + 5, y1), Vector2(r.end.x - 5, y1), lc, 1.0)
-	draw_line(Vector2(r.position.x + 5, y2), Vector2(r.end.x - 5, y2), lc, 1.0)
-	draw_line(Vector2(x1, r.position.y + 5), Vector2(x1, r.end.y - 5), lc, 1.0)
-	draw_rect(Rect2(Vector2(x1 - 2, y1 - 2), Vector2(4, 4)), col.lightened(0.65), true)
-	draw_rect(Rect2(Vector2(x1 - 2, y2 - 2), Vector2(4, 4)), col.lightened(0.65), true)
+# ── Squash & stretch curve ────────────────────────────────────────────────────
+# Land fat and short, overshoot tall and thin, elastic settle
+func _squash_scale(t: float) -> Vector2:
+	if t < 0.30:
+		var k := t / 0.30
+		k = 1.0 - (1.0 - k) * (1.0 - k)   # ease-out
+		return Vector2(lerpf(1.32, 0.88, k), lerpf(0.68, 1.18, k))
+	elif t < 0.65:
+		var k := (t - 0.30) / 0.35
+		return Vector2(lerpf(0.88, 1.06, k), lerpf(1.18, 0.95, k))
+	else:
+		var k := (t - 0.65) / 0.35
+		return Vector2(lerpf(1.06, 1.0, k), lerpf(0.95, 1.0, k))
 
-# ── Block style: BRICK ────────────────────────────────────────────────────────
-# Mortar-gap surround with inset face, rough bevel
-func _draw_brick(r: Rect2, col: Color) -> void:
-	draw_rect(Rect2(r.position + Vector2(3, 3), r.size + Vector2(6, 6)), Color(0, 0, 0, 0.50), true)
-	draw_rect(r, col.darkened(0.48), true)
-	var inner := r.grow(-4)
-	draw_rect(inner, col.darkened(0.08), true)
-	draw_rect(Rect2(inner.position, Vector2(inner.size.x, 4)), col.lightened(0.30), true)
-	draw_rect(Rect2(inner.position, Vector2(4, inner.size.y)), col.lightened(0.24), true)
-	draw_rect(Rect2(inner.position + Vector2(0, inner.size.y - 4), Vector2(inner.size.x, 4)), col.darkened(0.58), true)
-	draw_rect(Rect2(inner.position + Vector2(inner.size.x - 4, 0), Vector2(4, inner.size.y)), col.darkened(0.58), true)
+# ── Rounded drawing helpers ───────────────────────────────────────────────────
+func _rounded_points(r: Rect2, rad: float) -> PackedVector2Array:
+	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
+	var pts := PackedVector2Array()
+	var corners := [
+		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
+		[Vector2(r.end.x - rad, r.position.y + rad),          PI * 1.5,  TAU],
+		[r.end - Vector2(rad, rad),                           0.0,       PI * 0.5],
+		[Vector2(r.position.x + rad, r.end.y - rad),          PI * 0.5,  PI],
+	]
+	for cn in corners:
+		for i in 4:
+			var a : float = lerpf(cn[1], cn[2], float(i) / 3.0)
+			pts.append(cn[0] + Vector2(cos(a), sin(a)) * rad)
+	return pts
 
-# ── Block style: CRYSTAL ──────────────────────────────────────────────────────
-# Four-facet gem look using per-vertex colour triangles
-func _draw_crystal(r: Rect2, col: Color) -> void:
-	draw_rect(Rect2(r.position + Vector2(2, 2), r.size + Vector2(4, 4)), Color(0, 0, 0, 0.45), true)
-	draw_rect(r, col, true)
-	var tl  := r.position
-	var tr  := r.position + Vector2(r.size.x, 0)
-	var bl  := r.position + Vector2(0, r.size.y)
-	var br  := r.end
-	var ctr := r.get_center()
-	# Top facet (bright)
-	draw_polygon(PackedVector2Array([tl, tr, ctr]),
-		PackedColorArray([col.lightened(0.55), col.lightened(0.28), col.lightened(0.12)]))
-	# Left facet (medium bright)
-	draw_polygon(PackedVector2Array([tl, bl, ctr]),
-		PackedColorArray([col.lightened(0.38), col.lightened(0.08), col.lightened(0.12)]))
-	# Right facet (slightly dark)
-	draw_polygon(PackedVector2Array([tr, br, ctr]),
-		PackedColorArray([col.darkened(0.18), col.darkened(0.38), col.darkened(0.08)]))
-	# Bottom facet (dark)
-	draw_polygon(PackedVector2Array([bl, br, ctr]),
-		PackedColorArray([col.darkened(0.22), col.darkened(0.52), col.darkened(0.12)]))
-	# Thin bright outline
-	draw_rect(r, col.lightened(0.50), false, 1.0)
-	# Centre sparkle
-	draw_rect(Rect2(ctr - Vector2(3, 3), Vector2(6, 6)), Color(1, 1, 1, 0.65), true)
+func _rounded_rect(r: Rect2, rad: float, col: Color) -> void:
+	draw_polygon(_rounded_points(r, rad), PackedColorArray([col]))
 
-# ── Clear animation ───────────────────────────────────────────────────────────
-func _draw_clear_flash() -> void:
-	var total := clear_cells.size()
-	if total == 0:
-		return
-	for idx in total:
-		var cv     : Vector2i = clear_cells[idx]
-		var rect   := Rect2(cv.x * STEP, cv.y * STEP, CELL, CELL)
-		var appear : float    = float(idx) / float(total) * 0.55
-		if clear_t < appear:
+func _rounded_outline(r: Rect2, rad: float, col: Color, width: float) -> void:
+	var pts := _rounded_points(r, rad)
+	pts.append(pts[0])
+	draw_polyline(pts, col, width)
+
+func _rounded_gradient(r: Rect2, rad: float, top_col: Color, bot_col: Color) -> void:
+	var pts  := _rounded_points(r, rad)
+	var cols := PackedColorArray()
+	for p in pts:
+		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
+	draw_polygon(pts, cols)
+
+# ── Clear pop animation ───────────────────────────────────────────────────────
+# Each cleared cell pops: scales up bright, then shrinks to nothing while
+# spitting tiny coloured particles. Cascades outward from the placed piece.
+func _draw_clear_pop() -> void:
+	for ca in clear_anim:
+		var lt : float = clampf((clear_t - ca["delay"]) / POP_DUR, 0.0, 1.0)
+		if lt <= 0.0:
+			# Not started yet — cell already nulled, draw it intact while waiting
+			var rect0 := Rect2(ca["pos"].x * STEP, ca["pos"].y * STEP, CELL, CELL)
+			_draw_block(rect0, ca["color"], ca["seed"])
 			continue
-		var a     : float
-		var scale : float
-		if clear_t < 0.60:
-			a     = 1.0
-			scale = 1.0 + minf((clear_t - appear) * 0.25, 0.12)
+		if lt >= 1.0:
+			continue
+		var center := Vector2(ca["pos"].x * STEP + CELL * 0.5, ca["pos"].y * STEP + CELL * 0.5)
+		var col    : Color = ca["color"]
+		var scale_f : float
+		var alpha   : float
+		if lt < 0.35:
+			var k := lt / 0.35
+			scale_f = lerpf(1.0, 1.35, k)
+			alpha   = 1.0
+			col     = col.lerp(Color.WHITE, k * 0.7)
 		else:
-			a     = 1.0 - (clear_t - 0.60) / 0.40
-			scale = 1.12
-		var exp := CELL * (scale - 1.0) * 0.5
-		draw_rect(rect.grow(exp), Color(1, 1, 1, a), true)
+			var k := (lt - 0.35) / 0.65
+			scale_f = lerpf(1.35, 0.0, k * k)
+			alpha   = 1.0 - k
+			col     = col.lerp(Color.WHITE, 0.7 * (1.0 - k))
+		if scale_f > 0.01:
+			var size := Vector2(CELL, CELL) * scale_f
+			_rounded_rect(Rect2(center - size * 0.5, size), RAD * scale_f,
+				Color(col.r, col.g, col.b, alpha))
+		# Particles fly outward and shrink
+		if lt > 0.15:
+			var pk := (lt - 0.15) / 0.85
+			for part in ca["parts"]:
+				var ppos : Vector2 = center + part["dir"] * part["spd"] * pk
+				var psz  : float   = part["size"] * (1.0 - pk)
+				if psz > 0.5:
+					draw_rect(Rect2(ppos - Vector2(psz, psz) * 0.5, Vector2(psz, psz)),
+						Color(ca["color"].r, ca["color"].g, ca["color"].b, 1.0 - pk), true)
 
 # ── Grid logic ────────────────────────────────────────────────────────────────
 func can_place(shape: Array, row: int, col: int) -> bool:
@@ -208,13 +240,22 @@ func can_place(shape: Array, row: int, col: int) -> bool:
 			return false
 	return true
 
-func place(shape: Array, row: int, col: int, color: Color) -> void:
+func place(shape: Array, row: int, col: int, color: Color, pattern: int = -1) -> void:
+	var idx := 0
+	var cx  := 0.0
+	var cy  := 0.0
 	for cell in shape:
 		var r : int = row + cell[1]
 		var c : int = col + cell[0]
 		cells[r][c] = color
-		place_anim.append({"r": r, "c": c, "t": 0.0})
-	ghost_cells = []
+		# Pattern crop: cells of one piece share a random canvas region
+		seeds[r][c] = (pattern + cell[0] * 7 + cell[1] * 13) if pattern >= 0 else (r * 7 + c * 13)
+		place_anim.append({"r": r, "c": c, "t": -float(idx) * 0.10})
+		cx += c; cy += r
+		idx += 1
+	last_place_center = Vector2(cx / shape.size(), cy / shape.size())
+	ghost_cells   = []
+	preview_cells = []
 	queue_redraw()
 
 func check_and_clear() -> int:
@@ -240,7 +281,8 @@ func check_and_clear() -> int:
 	if full_rows.is_empty() and full_cols.is_empty():
 		return 0
 
-	clear_cells = []
+	# Collect cleared cells with their colours before nulling
+	var clear_cells : Array[Vector2i] = []
 	for r in full_rows:
 		for c in COLS:
 			clear_cells.append(Vector2i(c, r))
@@ -249,6 +291,23 @@ func check_and_clear() -> int:
 			var cv := Vector2i(c, r)
 			if not clear_cells.has(cv):
 				clear_cells.append(cv)
+
+	clear_anim  = []
+	clear_total = 0.0
+	for cv in clear_cells:
+		var ccol : Color = cells[cv.y][cv.x]
+		var cseed : int = seeds[cv.y][cv.x]
+		var delay : float = Vector2(cv.x, cv.y).distance_to(last_place_center) * 0.045
+		clear_total = maxf(clear_total, delay + POP_DUR)
+		var parts : Array = []
+		for i in 5:
+			var ang := (float(i) / 5.0 + float((cv.x * 3 + cv.y * 5 + i) % 7) * 0.02) * TAU
+			parts.append({
+				"dir":  Vector2(cos(ang), sin(ang)),
+				"spd":  26.0 + float((cv.x + cv.y * 2 + i * 3) % 5) * 7.0,
+				"size": 4.0 + float(i % 3) * 2.0,
+			})
+		clear_anim.append({"pos": cv, "color": ccol, "seed": cseed, "delay": delay, "parts": parts})
 
 	for r in full_rows:
 		for c in COLS: cells[r][c] = null
@@ -259,9 +318,9 @@ func check_and_clear() -> int:
 	clearing = true
 	queue_redraw()
 
-	var base  : int = full_rows.size() * COLS + full_cols.size() * ROWS
-	var bonus : int = (last_lines_cleared - 1) * 25 if last_lines_cleared > 1 else 0
-	return base + bonus
+	# Returns CELLS cleared (crossing lines share cells) — Game.gd owns
+	# all point math
+	return clear_cells.size()
 
 func is_board_empty() -> bool:
 	for r in ROWS:
@@ -269,6 +328,54 @@ func is_board_empty() -> bool:
 			if cells[r][c] != null:
 				return false
 	return true
+
+# How many rows+cols would complete if shape lands at (row,col).
+# Used by the smart spawner to find combo-enabling shapes.
+func count_completed_lines(shape: Array, row: int, col: int) -> int:
+	var shape_set := {}
+	for cell in shape:
+		shape_set[Vector2i(col + cell[0], row + cell[1])] = true
+	var n := 0
+	for r in ROWS:
+		var full := true
+		for c in COLS:
+			if cells[r][c] == null and not shape_set.has(Vector2i(c, r)):
+				full = false; break
+		if full: n += 1
+	for c in COLS:
+		var full := true
+		for r in ROWS:
+			if cells[r][c] == null and not shape_set.has(Vector2i(c, r)):
+				full = false; break
+		if full: n += 1
+	return n
+
+# All cells of every row/col that would become full if shape lands at (row,col)
+func get_completed_lines(shape: Array, row: int, col: int) -> Array[Vector2i]:
+	var shape_set := {}
+	for cell in shape:
+		shape_set[Vector2i(col + cell[0], row + cell[1])] = true
+
+	var out : Array[Vector2i] = []
+	for r in ROWS:
+		var full := true
+		for c in COLS:
+			if cells[r][c] == null and not shape_set.has(Vector2i(c, r)):
+				full = false; break
+		if full:
+			for c in COLS:
+				out.append(Vector2i(c, r))
+	for c in COLS:
+		var full := true
+		for r in ROWS:
+			if cells[r][c] == null and not shape_set.has(Vector2i(c, r)):
+				full = false; break
+		if full:
+			for r in ROWS:
+				var cv := Vector2i(c, r)
+				if not out.has(cv):
+					out.append(cv)
+	return out
 
 func set_ghost(shape: Array, row: int, col: int, color: Color) -> void:
 	ghost_cells = []
@@ -278,11 +385,14 @@ func set_ghost(shape: Array, row: int, col: int, color: Color) -> void:
 		var c : int = col + cell[0]
 		if r >= 0 and r < ROWS and c >= 0 and c < COLS:
 			ghost_cells.append(Vector2i(c, r))
+	preview_cells = get_completed_lines(shape, row, col)
+	preview_color = color
 	queue_redraw()
 
 func clear_ghost() -> void:
-	if not ghost_cells.is_empty():
-		ghost_cells = []
+	if not ghost_cells.is_empty() or not preview_cells.is_empty():
+		ghost_cells   = []
+		preview_cells = []
 		queue_redraw()
 
 func can_any_fit(pieces: Array, placed: Array) -> bool:

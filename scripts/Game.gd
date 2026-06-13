@@ -41,25 +41,37 @@ const SHAPES: Array = [
 ]
 
 const COLORS: Array = [
-	Color(0.20, 0.75, 0.95),
-	Color(1.00, 0.55, 0.15),
-	Color(0.90, 0.25, 0.60),
-	Color(0.20, 0.85, 0.45),
-	Color(0.65, 0.30, 0.95),
-	Color(0.95, 0.85, 0.15),
+	Color(0.32, 0.80, 0.97),
+	Color(1.00, 0.63, 0.28),
+	Color(0.95, 0.36, 0.68),
+	Color(0.33, 0.90, 0.55),
+	Color(0.73, 0.43, 0.97),
+	Color(0.97, 0.88, 0.32),
 ]
 
 # ── Themes ────────────────────────────────────────────────────────────────────
-# Each theme controls: bg color, orb accent, name, block style (matches index)
-# Style 0=Pastel  1=Neon  2=Circuit  3=Brick  4=Crystal
-const THEMES: Array = [
-	{"bg": Color(0.06, 0.05, 0.09), "orb": Color(0.55, 0.70, 1.00, 0.07), "name": "DEEP SPACE"},
-	{"bg": Color(0.03, 0.08, 0.04), "orb": Color(0.20, 1.00, 0.45, 0.07), "name": "NEON JUNGLE"},
-	{"bg": Color(0.07, 0.03, 0.10), "orb": Color(0.70, 0.20, 1.00, 0.07), "name": "SYNTHWAVE"},
-	{"bg": Color(0.10, 0.05, 0.01), "orb": Color(1.00, 0.50, 0.10, 0.07), "name": "SOLAR FLARE"},
-	{"bg": Color(0.03, 0.05, 0.12), "orb": Color(0.40, 0.65, 1.00, 0.07), "name": "NEBULA"},
-]
+# Theme data lives in GameState.THEMES (shared with the menus so their
+# backgrounds follow the selected skin). Alias keeps local references short.
+# Style/theme index: 0=Pastel 1=Neon 2=Circuit 3=BrickWall 4=Crystal 5=Candy
+#                    6=Frost 7=Grass 8=Water 9=Lava 10=Wood 11=Galaxy
+var THEMES : Array = GameState.THEMES
 const THEME_INTERVAL := 7
+
+# ── Scoring ───────────────────────────────────────────────────────────────────
+# Modeled on Block Blast's economy: cleared cells are the currency (10/cell),
+# simultaneous multi-line clears earn a NON-linear bonus, back-to-back clear
+# streaks multiply clear points only (capped), and a full-board clear is a
+# flat cherry worth ~4 single lines — never the dominant strategy.
+const CELL_POINTS     := 10
+const MULTI_BONUS     : Array = [0, 0, 40, 90, 180, 300, 450]   # index = lines cleared (6+ capped)
+const STREAK_STEP     := 0.30     # +30% clear points per consecutive clearing move
+const STREAK_CAP      := 6.0      # streak multiplier ceiling
+const BOARD_CLEAR_PTS := 400
+# Depth scaling: surviving deep into a run makes every move worth more —
+# +5% per placement, capping at x12 (220 moves in). Tuned so a strong
+# 10-15 minute run (~150-200 moves with steady clears) reaches ~100k.
+const DEPTH_STEP      := 0.05
+const DEPTH_CAP       := 12.0
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 const GRID_X    := 24.0
@@ -74,6 +86,10 @@ const TRAY_H    := 175.0
 const TRAY_CELL := 28.0
 const TRAY_STEP := 29.0
 const SLOT_W    := 138.0
+
+# Dragged pieces float this far above the touch point so the finger
+# doesn't cover them
+const DRAG_LIFT := 70.0
 
 const EARLY_SHAPES: Array = [
 	[[0,0]],
@@ -97,6 +113,12 @@ var score         : int     = 0
 var sets_given    : int     = 0
 var lines_cleared : int     = 0
 var combo         : int     = 0
+var placements    : int     = 0      # pieces placed this run — drives smart spawning
+var run_over      : bool    = false  # blocks auto-save once the run has ended
+var max_combo     : int     = 0      # best streak this run (game-over breakdown)
+var board_clears  : int     = 0      # full-board clears this run
+var streak_lost_t : float   = 0.0    # drives the "streak lost" flash on the meter
+var drag_pop_t    : float   = 0.0    # pickup swell on the dragged piece
 
 # Theme / background
 var theme_idx     : int    = 0
@@ -116,21 +138,49 @@ var flash_col : Color = Color.TRANSPARENT
 const ORB_COUNT := 14
 var orbs: Array = []
 
+# Pause / settings overlay
+const GEAR_RECT := Rect2(360.0, 26.0, 42.0, 42.0)
+var menu_open  : bool = false
+var pause_menu : Control
+
+# Tray spawn bounce
+var tray_pop_t : float = 0.0
+
 @onready var grid        : Grid        = $Grid
 @onready var score_label : Label       = $UI/ScoreLabel
 @onready var best_label  : Label       = $UI/BestLabel
 @onready var combo_label : Label       = $UI/ComboLabel
 @onready var ui          : CanvasLayer = $UI
 
+# Overlay for the dragged piece — added after Grid so it renders ON TOP of
+# the board (it used to draw under the grid blocks)
+var drag_layer : Node2D
+
 func _ready() -> void:
+	# Theme progression carries over between runs
+	theme_idx = GameState.theme_idx % THEMES.size()
+	curr_bg   = THEMES[_visual_idx()]["bg"]
+	prev_bg   = curr_bg
 	_init_orbs()
-	grid.block_style = theme_idx
+	_build_pause_menu()
+	drag_layer = Node2D.new()
+	add_child(drag_layer)
+	drag_layer.draw.connect(_draw_drag_layer)
+	# Score bounce should swell from the badge centre, not the corner
+	score_label.pivot_offset = score_label.size * 0.5
+	combo_label.pivot_offset = combo_label.size * 0.5
+	_apply_block_style()
 	if GameState.has_save:
 		_restore_state()
 		GameState.has_save = false
+		if GameState.continue_mode == "ad":
+			GameState.revive_used = true   # one revive per run
+			GameState.add_revive()
 	else:
+		GameState.revive_used = false
 		_spawn_pieces()
 	_refresh_best()
+	Sfx.update_music()
 
 # ── Orbs ──────────────────────────────────────────────────────────────────────
 func _init_orbs() -> void:
@@ -139,7 +189,7 @@ func _init_orbs() -> void:
 		orbs.append(_make_orb())
 
 func _make_orb() -> Dictionary:
-	var orb_col: Color = THEMES[theme_idx]["orb"]
+	var orb_col: Color = THEMES[_visual_idx()]["orb"]
 	return {
 		"pos":    Vector2(randf() * 414.0, randf() * 896.0),
 		"vel":    Vector2((randf() - 0.5) * 22.0, (randf() - 0.5) * 22.0),
@@ -177,7 +227,19 @@ func _process(delta: float) -> void:
 	if flash_t > 0.0:
 		flash_t = maxf(flash_t - delta / 0.35, 0.0)
 
+	if tray_pop_t > 0.0:
+		tray_pop_t = maxf(tray_pop_t - delta * 2.5, 0.0)
+
+	if streak_lost_t > 0.0:
+		streak_lost_t = maxf(streak_lost_t - delta / 1.1, 0.0)
+		if streak_lost_t == 0.0:
+			_update_combo_label()
+
+	if drag_pop_t > 0.0:
+		drag_pop_t = maxf(drag_pop_t - delta * 4.0, 0.0)
+
 	queue_redraw()
+	drag_layer.queue_redraw()
 
 # ── Spawning ──────────────────────────────────────────────────────────────────
 func _spawn_pieces() -> void:
@@ -206,9 +268,13 @@ func _spawn_pieces() -> void:
 				shape = alts[randi() % alts.size()]
 				key   = str(shape)
 		picked_keys.append(key)
-		pieces.append({"shape": shape, "color": COLORS[randi() % COLORS.size()]})
+		# "pattern" = random crop position in the virtual skin canvas — makes
+		# every piece's skin detail unique (cells of one piece stay related)
+		pieces.append({"shape": shape, "color": COLORS[randi() % COLORS.size()],
+			"pattern": randi() % 1000000})
 
 	sets_given += 1
+	tray_pop_t = 1.0
 	grid.clear_ghost()
 	queue_redraw()
 	if not grid.can_any_fit(_shapes_array(), placed):
@@ -217,10 +283,97 @@ func _spawn_pieces() -> void:
 func _progression() -> float:
 	return clampf((sets_given - 2) / 10.0, 0.0, 1.0)
 
+# Early-game generosity fades GRADUALLY: 85% smart picks at move 0, easing
+# to 0% by move ~45. Smart picks complete lines (multi-line wins outright);
+# when nothing clears yet, hand out big "builder" pieces so the board fills
+# fast and double/triple clears set themselves up.
+const SMART_FADE_MOVES := 45.0
+
+const BUILDER_SHAPES : Array = [
+	[[0,0],[1,0],[2,0],[3,0]],
+	[[0,0],[0,1],[0,2],[0,3]],
+	[[0,0],[1,0],[2,0],[3,0],[4,0]],
+	[[0,0],[0,1],[0,2],[0,3],[0,4]],
+	[[0,0],[1,0],[0,1],[1,1]],
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]],
+	[[0,0],[1,0],[0,1],[1,1],[0,2],[1,2]],
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1],[0,2],[1,2],[2,2]],
+]
+
 func _pick_shape() -> Array:
+	var smart_p : float = clampf(0.85 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.85)
+	if randf() < smart_p:
+		var smart := _pick_combo_shape()
+		if not smart.is_empty():
+			return smart
+		# Nothing completes a line yet — give mass so multi-clears build up
+		var fitting : Array = []
+		for bs in BUILDER_SHAPES:
+			for r in GRID_ROWS:
+				var fits := false
+				for c in GRID_COLS:
+					if grid.can_place(bs, r, c):
+						fits = true; break
+				if fits:
+					fitting.append(bs)
+					break
+		if not fitting.is_empty():
+			return fitting[randi() % fitting.size()]
+		return _pick_helpful_shape()
 	if randf() < _progression():
 		return SHAPES[randi() % SHAPES.size()]
 	return _pick_helpful_shape()
+
+# Find the shape with the highest line-clear potential anywhere on the board.
+# Multi-line completions (the big combos) win outright; ties break randomly
+# so the player doesn't get the same gift shape every time.
+# Uses precomputed row/col fill counts so the full shape×position sweep stays
+# cheap enough for set-spawn on mobile (can_place guarantees no overlap, so
+# fill + shape-cells-in-line == line length means the line completes).
+func _pick_combo_shape() -> Array:
+	var row_fill : Array = []
+	var col_fill : Array = []
+	for r in GRID_ROWS:
+		var n := 0
+		for c in GRID_COLS:
+			if grid.cells[r][c] != null: n += 1
+		row_fill.append(n)
+	for c in GRID_COLS:
+		var n := 0
+		for r in GRID_ROWS:
+			if grid.cells[r][c] != null: n += 1
+		col_fill.append(n)
+
+	var best_lines := 0
+	var candidates : Array = []
+	for s in SHAPES:
+		var s_best := 0
+		for r in GRID_ROWS:
+			for c in GRID_COLS:
+				if not grid.can_place(s, r, c):
+					continue
+				var rows_touched := {}
+				var cols_touched := {}
+				for cell in s:
+					var rr : int = r + cell[1]
+					var cc : int = c + cell[0]
+					rows_touched[rr] = rows_touched.get(rr, 0) + 1
+					cols_touched[cc] = cols_touched.get(cc, 0) + 1
+				var n := 0
+				for rr in rows_touched:
+					if row_fill[rr] + rows_touched[rr] == GRID_COLS: n += 1
+				for cc in cols_touched:
+					if col_fill[cc] + cols_touched[cc] == GRID_ROWS: n += 1
+				if n > s_best:
+					s_best = n
+		if s_best > best_lines:
+			best_lines = s_best
+			candidates = [s]
+		elif s_best == best_lines and s_best > 0:
+			candidates.append(s)
+	if best_lines >= 1 and not candidates.is_empty():
+		return candidates[randi() % candidates.size()]
+	return []
 
 func _pick_helpful_shape() -> Array:
 	var best_row    := -1
@@ -285,23 +438,29 @@ func _shapes_array() -> Array:
 		arr.append(p.shape)
 	return arr
 
-# ── Watch-ad restore ──────────────────────────────────────────────────────────
+# ── Run restore (menu-continue = exact, watch-ad = with gift rows) ───────────
 func _restore_state() -> void:
 	score         = GameState.save_score
 	sets_given    = GameState.save_sets_given
 	lines_cleared = GameState.save_lines_cleared
 	combo         = GameState.save_combo
-	theme_idx     = GameState.save_theme_idx
-	curr_bg       = THEMES[theme_idx]["bg"]
+	placements    = GameState.save_placements
+	max_combo     = GameState.save_max_combo
+	board_clears  = GameState.save_board_clears
+	theme_idx     = GameState.theme_idx % THEMES.size()
+	curr_bg       = THEMES[_visual_idx()]["bg"]
 	prev_bg       = curr_bg
 	theme_lerp    = 1.0
-	grid.block_style = theme_idx
+	_apply_block_style()
 
 	for r in GRID_ROWS:
 		for c in GRID_COLS:
 			grid.cells[r][c] = GameState.save_cells[r][c]
+			if not GameState.save_seeds.is_empty():
+				grid.seeds[r][c] = GameState.save_seeds[r][c]
 
-	_help_player_continue()
+	if GameState.continue_mode == "ad":
+		_help_player_continue()
 
 	pieces = GameState.save_pieces.duplicate(true)
 	placed = GameState.save_placed.duplicate()
@@ -327,6 +486,8 @@ func _help_player_continue() -> void:
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 func _input(event: InputEvent) -> void:
+	if menu_open:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed: _start_drag(event.position)
 		else:             _end_drag(event.position)
@@ -343,67 +504,178 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 
 func _start_drag(pos: Vector2) -> void:
+	if GEAR_RECT.grow(8).has_point(pos):
+		_toggle_pause_menu()
+		return
 	var slot := _pos_to_slot(pos)
 	if slot >= 0 and not placed[slot]:
 		dragging_slot = slot
 		drag_pos      = pos
+		drag_pop_t    = 1.0
+		Sfx.play_pickup()
 		queue_redraw()
 
 func _end_drag(pos: Vector2) -> void:
 	if dragging_slot < 0:
 		return
+	var lifted := pos + Vector2(0, -DRAG_LIFT)
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
-	var snap  : Vector2i = _get_snap(pos, shape)
+	var snap  : Vector2i = _get_snap(lifted, shape)
 
 	if grid.can_place(shape, snap.y, snap.x):
-		grid.place(shape, snap.y, snap.x, color)
+		grid.place(shape, snap.y, snap.x, color, pieces[dragging_slot].get("pattern", 0))
 		placed[dragging_slot] = true
+		Sfx.play_place()
 
-		var clear_bonus : int = grid.check_and_clear()
+		var cells_cleared : int = grid.check_and_clear()
+		var lines         : int = grid.last_lines_cleared
 
-		if grid.last_lines_cleared > 0:
+		if lines > 0:
 			combo += 1
+			max_combo = maxi(max_combo, combo)
+			Sfx.play_clear(lines)
+			Sfx.play_combo(combo)
+			_buzz(30 + lines * 12)
+			# Big simultaneous clears rattle the board
+			if lines >= 3:
+				shake_t = maxf(shake_t, 0.15 + 0.06 * float(lines))
 		else:
+			if combo >= 2:
+				streak_lost_t = 1.0   # flash the meter before it disappears
 			combo = 0
+			_buzz(12)
 
-		var multiplier : int = max(1, combo)
-		var gained     : int = (shape.size() + clear_bonus) * multiplier
+		# Streak multiplier applies to CLEAR points only — placement stays
+		# cheap so clears remain the engine of the score
+		var streak_mult : float = 1.0
+		if combo > 1:
+			streak_mult = minf(1.0 + STREAK_STEP * float(combo - 1), STREAK_CAP)
+		var clear_pts : int = 0
+		if lines > 0:
+			clear_pts = int(round((cells_cleared * CELL_POINTS
+				+ MULTI_BONUS[mini(lines, MULTI_BONUS.size() - 1)]) * streak_mult))
+
+		# Depth scaling: the same move pays more the deeper you are in the run
+		var depth_mult : float = minf(1.0 + DEPTH_STEP * float(placements), DEPTH_CAP)
+		var gained : int = int(round((float(shape.size()) + float(clear_pts)) * depth_mult))
 
 		if grid.is_board_empty():
-			gained += 500 * multiplier
+			gained += BOARD_CLEAR_PTS
+			board_clears += 1
+			Sfx.play_board_clear()
+			_buzz(90)
 			_show_board_clear_popup()
 
 		score += gained
 		score_label.text = str(score)
 		GameState.submit_score(score)
+		_check_achievements(lines)
 		_refresh_best()
 		_pop_score(gained)
-		_show_score_popup(gained, grid.last_lines_cleared, multiplier)
-		_show_clear_text(grid.last_lines_cleared)
+		_show_score_popup(gained, lines, combo)
+		_show_clear_text(lines)
 		_update_combo_label()
 
-		var new_total   := lines_cleared + grid.last_lines_cleared
-		var old_bracket := lines_cleared / THEME_INTERVAL
-		var new_bracket := new_total     / THEME_INTERVAL
-		lines_cleared = new_total
-		if new_bracket > old_bracket:
-			_advance_theme()
+		placements    += 1
+		lines_cleared += grid.last_lines_cleared
+
+		# Theme advances on GLOBAL lines across all runs — fresh backgrounds
+		# keep coming no matter how short each game is
+		if grid.last_lines_cleared > 0:
+			@warning_ignore("integer_division")
+			var old_bracket : int = GameState.total_lines / THEME_INTERVAL
+			GameState.add_lines(grid.last_lines_cleared)
+			@warning_ignore("integer_division")
+			var new_bracket : int = GameState.total_lines / THEME_INTERVAL
+			if new_bracket > old_bracket:
+				_advance_theme()
 
 		if placed[0] and placed[1] and placed[2]:
 			_spawn_pieces()
 		elif not grid.can_any_fit(_shapes_array(), placed):
 			_game_over()
 
+		_save_run()
+	elif _is_over_grid(lifted):
+		Sfx.play_invalid()
+		_buzz(25)
+
 	dragging_slot = -1
 	grid.clear_ghost()
 	queue_redraw()
+
+# Light haptic tap — no-ops on desktop and respects the settings toggle
+func _buzz(ms: int) -> void:
+	if GameState.haptics_on:
+		Input.vibrate_handheld(ms)
+
+# ── Achievements ──────────────────────────────────────────────────────────────
+# Push run-live values into the lifetime stats, then unlock anything earned.
+# (Blocks/games/board totals roll up at game over; these can pop mid-run.)
+func _check_achievements(lines_this_move: int) -> void:
+	GameState.stat_best_streak = maxi(GameState.stat_best_streak, combo)
+	GameState.stat_best_multi  = maxi(GameState.stat_best_multi, lines_this_move)
+	for key in GameState.check_unlocks():
+		_show_achievement_toast(key)
+
+func _show_achievement_toast(id: String) -> void:
+	var a : Dictionary = GameState.ach_info(id)
+	if a.is_empty():
+		return
+	Sfx.play_best()
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.11, 0.20, 0.96)
+	sb.set_corner_radius_all(16)
+	sb.border_width_bottom = 5
+	sb.border_color = Color(0.95, 0.75, 0.15)
+	sb.content_margin_left = 18; sb.content_margin_right = 18
+	sb.content_margin_top = 10;  sb.content_margin_bottom = 12
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.custom_minimum_size = Vector2(330, 0)
+	panel.position = Vector2(42, -90)
+	ui.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	panel.add_child(vbox)
+	var header := Label.new()
+	header.text = "ACHIEVEMENT UNLOCKED"
+	header.add_theme_font_size_override("font_size", 11)
+	header.add_theme_color_override("font_color", Color(1, 1, 1, 0.50))
+	vbox.add_child(header)
+	var title := Label.new()
+	title.text = a["name"] + "   +" + str(a["xp"]) + " XP"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20))
+	vbox.add_child(title)
+	var desc := Label.new()
+	desc.text = a["desc"]
+	desc.add_theme_font_size_override("font_size", 13)
+	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
+	vbox.add_child(desc)
+
+	var t := create_tween()
+	t.tween_property(panel, "position:y", 88.0, 0.40).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_interval(2.4)
+	t.tween_property(panel, "position:y", -110.0, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.tween_callback(panel.queue_free)
+
+# Dev skin override (main-menu picker) wins over the theme — and drives the
+# WHOLE visual set (blocks, background colour, pattern, orbs), not just blocks
+func _visual_idx() -> int:
+	if GameState.dev_skin_override >= 0:
+		return GameState.dev_skin_override
+	return theme_idx
+
+func _apply_block_style() -> void:
+	grid.block_style = _visual_idx()
 
 func _update_ghost() -> void:
 	if dragging_slot < 0 or placed[dragging_slot]:
 		return
 	var shape : Array    = pieces[dragging_slot].shape
-	var snap  : Vector2i = _get_snap(drag_pos, shape)
+	var snap  : Vector2i = _get_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
 	if grid.can_place(shape, snap.y, snap.x):
 		grid.set_ghost(shape, snap.y, snap.x, pieces[dragging_slot].color)
 	else:
@@ -439,8 +711,12 @@ func _pos_to_slot(pos: Vector2) -> int:
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 func _advance_theme() -> void:
-	prev_bg    = curr_bg
 	theme_idx  = (theme_idx + 1) % THEMES.size()
+	GameState.set_theme(theme_idx)
+	# Skin override active: progression still ticks, but visuals stay locked
+	if GameState.dev_skin_override >= 0:
+		return
+	prev_bg    = curr_bg
 	curr_bg    = THEMES[theme_idx]["bg"]
 	theme_lerp = 0.0
 
@@ -449,7 +725,7 @@ func _advance_theme() -> void:
 		orb["color"] = Color(orb_col.r, orb_col.g, orb_col.b, orb["color"].a)
 		orb["vel"]   *= 1.4   # burst of speed on transition
 
-	grid.block_style = theme_idx
+	_apply_block_style()
 
 	# Screen shake
 	shake_t = 0.50
@@ -463,16 +739,20 @@ func _advance_theme() -> void:
 	)
 	flash_t = 1.0
 
+	Sfx.play_theme()
 	_show_theme_popup(THEMES[theme_idx]["name"])
 
 func _show_theme_popup(theme_name: String) -> void:
 	var lbl := Label.new()
 	lbl.text = theme_name
 	lbl.add_theme_font_size_override("font_size", 26)
-	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.0))
+	lbl.add_theme_color_override("font_color", THEMES[theme_idx]["accent"])
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	lbl.add_theme_constant_override("outline_size", 6)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.size     = Vector2(300, 48)
-	lbl.position = Vector2(57, 460)
+	lbl.size       = Vector2(300, 48)
+	lbl.position   = Vector2(57, 460)
+	lbl.modulate.a = 0.0
 	ui.add_child(lbl)
 	var t := create_tween()
 	t.tween_property(lbl, "modulate:a", 1.0, 0.18)
@@ -501,56 +781,375 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, Vector2(414, 896)),
 			Color(flash_col.r, flash_col.g, flash_col.b, flash_t * 0.40), true)
 
+	# Score badge + best pill behind the labels (must track the label rects
+	# in Game.tscn: score box y16-126, best box y134-164, both centred on 207)
+	_rr_fill(Rect2(107, 18, 200, 106), 26.0, Color(0, 0, 0, 0.25))
+	_rr_outline(Rect2(107, 18, 200, 106), 26.0, Color(1, 1, 1, 0.07), 1.5)
+	_rr_fill(Rect2(137, 134, 140, 30), 15.0, Color(0, 0, 0, 0.30))
+
+	# Settings gear button (top-right)
+	_draw_gear_button()
+
+	# Streak meter (between grid and tray)
+	if combo >= 2 or streak_lost_t > 0.0:
+		_draw_streak_meter()
+
 	# Grid backdrop
-	var grid_rect := Rect2(GRID_X - 6, GRID_Y - 6,
-		GRID_COLS * GRID_STEP + 10, GRID_ROWS * GRID_STEP + 10)
-	draw_rect(grid_rect, Color(0, 0, 0, 0.28), true)
-	draw_rect(grid_rect, Color(1, 1, 1, 0.06), false, 1.5)
+	var grid_rect := Rect2(GRID_X - 8, GRID_Y - 8,
+		GRID_COLS * GRID_STEP + 14, GRID_ROWS * GRID_STEP + 14)
+	_rr_fill(grid_rect, 14.0, Color(0, 0, 0, 0.28))
+	_rr_outline(grid_rect, 14.0, Color(1, 1, 1, 0.06), 1.5)
 
 	# Tray
 	for i in 3:
 		_draw_slot(i)
 
-	if dragging_slot >= 0 and not placed[dragging_slot]:
-		_draw_dragging_piece()
-
 	draw_set_transform(Vector2.ZERO)
 
 func _draw_bg_pattern() -> void:
-	match theme_idx:
-		0:  # Deep Space — distant stars
-			for i in 50:
-				var sx : float = fmod(float(i * 97  + 13) * 37.3, 414.0)
-				var sy : float = fmod(float(i * 53  + 71) * 19.7, 896.0)
-				var sa : float = fmod(float(i * 31) * 0.13,  0.35) + 0.08
-				draw_rect(Rect2(sx, sy, 2.0, 2.0), Color(1, 1, 1, sa), true)
-		1:  # Neon Jungle — scanlines
+	match _visual_idx():
+		0:  # Pastel Sky — blue sky with drifting clouds and a soft sun
+			var ct := Time.get_ticks_msec() * 0.001
+			# Soft sun glow, top-left
+			draw_circle(Vector2(62, 92), 72.0, Color(1.0, 0.96, 0.75, 0.10))
+			draw_circle(Vector2(62, 92), 42.0, Color(1.0, 0.97, 0.82, 0.12))
+			# Puffy clouds drifting across at different speeds
+			for i in 6:
+				var spd : float = 6.0 + float(i % 3) * 3.5
+				var cx  : float = fmod(float(i * 157 + 40) * 13.7 + ct * spd, 514.0) - 50.0
+				var cy  : float = 70.0 + float(i) * 135.0 + sin(ct * 0.3 + float(i) * 1.7) * 6.0
+				var sc  : float = 0.8 + float(i % 3) * 0.35
+				var cc  := Color(1, 1, 1, 0.13)
+				draw_circle(Vector2(cx, cy), 26.0 * sc, cc)
+				draw_circle(Vector2(cx + 22.0 * sc, cy + 6.0 * sc), 20.0 * sc, cc)
+				draw_circle(Vector2(cx - 22.0 * sc, cy + 7.0 * sc), 18.0 * sc, cc)
+				draw_circle(Vector2(cx + 6.0 * sc, cy - 13.0 * sc), 17.0 * sc, cc)
+		1:  # Neon Jungle — scanlines + glowing vine zigzags
 			for y_line in range(0, 896, 5):
 				draw_line(Vector2(0, y_line), Vector2(414, y_line),
 					Color(0, 0, 0, 0.07), 1.0)
-		2:  # Synthwave — perspective grid
-			for gx in range(0, 414, 38):
-				draw_line(Vector2(gx, 0), Vector2(gx, 896),
-					Color(0.65, 0.20, 1.0, 0.07), 1.0)
-			for gy in range(0, 896, 38):
-				draw_line(Vector2(0, gy), Vector2(414, gy),
-					Color(0.65, 0.20, 1.0, 0.05), 1.0)
-		3:  # Solar Flare — diagonal heat streaks
-			for i in 10:
-				var ys : float = float(i) * 95.0
-				draw_line(Vector2(0, ys + 30), Vector2(414, ys - 30),
-					Color(1.0, 0.55, 0.10, 0.045), 2.5)
-		4:  # Nebula — faint concentric rings
+			for v in 3:
+				var vx : float = 60.0 + float(v) * 145.0
+				var pts := PackedVector2Array()
+				for k in 9:
+					var vy := float(k) * 112.0
+					pts.append(Vector2(vx + (18.0 if k % 2 == 0 else -18.0) + sin(float(v) * 2.0 + float(k)) * 8.0, vy))
+				draw_polyline(pts, Color(0.20, 1.00, 0.45, 0.07), 2.5)
+				# Leaf nubs at the bends
+				for k in range(1, 8, 2):
+					draw_circle(pts[k], 4.0, Color(0.20, 1.00, 0.45, 0.06))
+		2:  # Circuit City — PCB traces with node dots
+			var tc := Color(0.20, 0.95, 0.65, 0.05)
+			for i in 6:
+				var ty : float = 70.0 + float(i) * 150.0
+				var bend_x : float = 60.0 + float((i * 73) % 280)
+				draw_line(Vector2(0, ty), Vector2(bend_x, ty), tc, 1.5)
+				draw_line(Vector2(bend_x, ty), Vector2(bend_x, ty + 80.0), tc, 1.5)
+				draw_line(Vector2(bend_x, ty + 80.0), Vector2(414, ty + 80.0), tc, 1.5)
+				draw_circle(Vector2(bend_x, ty), 3.0, Color(0.20, 0.95, 0.65, 0.10))
+				draw_circle(Vector2(bend_x, ty + 80.0), 3.0, Color(0.20, 0.95, 0.65, 0.10))
+		3:  # Brickyard — faint running-bond wall
+			var bc2 := Color(0.95, 0.45, 0.25, 0.045)
+			var brow := 0
+			for by2 in range(0, 896, 44):
+				draw_line(Vector2(0, by2), Vector2(414, by2), bc2, 1.5)
+				var off := 0.0 if brow % 2 == 0 else 44.0
+				for bx2 in range(0, 502, 88):
+					draw_line(Vector2(float(bx2) + off, by2), Vector2(float(bx2) + off, by2 + 44.0), bc2, 1.5)
+				brow += 1
+		4:  # Crystal Cave — gem shards growing from the edges + floating ones
+			var dt := Time.get_ticks_msec() * 0.001
+			var shard_c := Color(0.40, 0.60, 1.0, 0.07)
+			# Shard clusters along the bottom edge
+			for i in 7:
+				var sx2 : float = 20.0 + float(i) * 62.0
+				var sh  : float = 40.0 + float((i * 37) % 50)
+				draw_polygon(PackedVector2Array([
+					Vector2(sx2 - 14.0, 896.0), Vector2(sx2 + float((i * 13) % 11) - 5.0, 896.0 - sh),
+					Vector2(sx2 + 14.0, 896.0)]), PackedColorArray([shard_c]))
+			# A few floating rotating shards
 			for i in 4:
-				draw_arc(Vector2(207, 448), 70.0 + i * 75.0, 0, TAU, 64,
-					Color(0.40, 0.60, 1.0, 0.05), 1.5, false)
+				var dx : float = fmod(float(i * 113 + 29) * 33.1, 414.0)
+				var dy : float = 100.0 + fmod(float(i * 67 + 43) * 41.9, 600.0)
+				var rot := dt * 0.25 * (1.0 if i % 2 == 0 else -1.0) + float(i)
+				draw_set_transform(Vector2(dx, dy), rot)
+				draw_polygon(PackedVector2Array([Vector2(-7, 12), Vector2(0, -14), Vector2(7, 12)]),
+					PackedColorArray([shard_c]))
+				draw_set_transform(Vector2.ZERO)
+		5:  # Candy Land — slowly spinning wrapped candies
+			var cdt := Time.get_ticks_msec() * 0.001
+			for i in 8:
+				var px : float = fmod(float(i * 131 + 37) * 29.7, 414.0)
+				var py : float = fmod(float(i * 89  + 17) * 47.3, 896.0)
+				var rot := cdt * 0.3 * (1.0 if i % 2 == 0 else -1.0) + float(i)
+				var cs2 : float = 9.0 + float(i % 3) * 4.0
+				var cc2 := Color(1.0, 0.55, 0.75, 0.07)
+				draw_set_transform(Vector2(px, py), rot)
+				draw_circle(Vector2.ZERO, cs2, cc2)
+				# Wrapper twists
+				draw_polygon(PackedVector2Array([Vector2(-cs2, 0), Vector2(-cs2 * 1.9, -cs2 * 0.7), Vector2(-cs2 * 1.9, cs2 * 0.7)]), PackedColorArray([cc2]))
+				draw_polygon(PackedVector2Array([Vector2(cs2, 0),  Vector2(cs2 * 1.9, -cs2 * 0.7),  Vector2(cs2 * 1.9, cs2 * 0.7)]),  PackedColorArray([cc2]))
+				# Stripe
+				draw_line(Vector2(-cs2 * 0.5, -cs2 * 0.8), Vector2(-cs2 * 0.5, cs2 * 0.8), Color(1, 1, 1, 0.05), 2.0)
+				draw_set_transform(Vector2.ZERO)
+		6:  # Frozen Peak — falling six-arm snowflakes
+			var drift := Time.get_ticks_msec() * 0.001
+			for i in 14:
+				var sx : float = fmod(float(i * 97 + 13) * 37.3 + drift * (6.0 + float(i % 5) * 3.0), 414.0)
+				var sy : float = fmod(float(i * 53 + 71) * 19.7 + drift * (14.0 + float(i % 7) * 5.0), 896.0)
+				var fs : float = 5.0 + float(i % 3) * 3.0
+				var rot := drift * 0.4 + float(i)
+				var fa  := Color(1, 1, 1, 0.08 + float(i % 3) * 0.03)
+				draw_set_transform(Vector2(sx, sy), rot)
+				for arm in 3:
+					var a := float(arm) * PI / 3.0
+					var dir := Vector2(cos(a), sin(a)) * fs
+					draw_line(-dir, dir, fa, 1.2)
+					# Side ticks on each arm
+					draw_line(dir * 0.55, dir * 0.55 + dir.rotated(PI * 0.5) * 0.3, fa, 1.0)
+					draw_line(dir * 0.55, dir * 0.55 + dir.rotated(-PI * 0.5) * 0.3, fa, 1.0)
+				draw_set_transform(Vector2.ZERO)
+		7:  # Meadow — falling petals + grass tufts along the bottom
+			var pt := Time.get_ticks_msec() * 0.001
+			for i in 12:
+				var px : float = fmod(float(i * 131 + 31) * 23.9 + sin(pt * 0.8 + float(i)) * 20.0, 414.0)
+				var py : float = fmod(float(i * 73 + 7) * 41.3 + pt * (8.0 + float(i % 4) * 4.0), 896.0)
+				var rot := pt * 0.6 + float(i) * 1.3
+				draw_set_transform(Vector2(px, py), rot)
+				draw_polygon(PackedVector2Array([Vector2(0, -5), Vector2(3.5, 0), Vector2(0, 5), Vector2(-3.5, 0)]),
+					PackedColorArray([Color(0.75, 1.0, 0.55, 0.09)]))
+				draw_set_transform(Vector2.ZERO)
+			for i in 28:
+				var gx2 : float = float(i) * 15.0 + float((i * 7) % 9)
+				var gh  : float = 14.0 + float((i * 13) % 18) + sin(pt * 1.2 + float(i)) * 2.0
+				draw_polygon(PackedVector2Array([
+					Vector2(gx2 - 4.0, 896.0), Vector2(gx2 + float((i * 5) % 7) - 3.0, 896.0 - gh),
+					Vector2(gx2 + 4.0, 896.0)]), PackedColorArray([Color(0.45, 0.95, 0.35, 0.07)]))
+		8:  # Ocean — waves + little fish swimming by
+			var ot := Time.get_ticks_msec() * 0.001
+			for i in 7:
+				var wy : float = 80.0 + float(i) * 120.0
+				var pts := PackedVector2Array()
+				for x in range(0, 415, 30):
+					pts.append(Vector2(float(x), wy + sin(ot * 0.8 + float(i) * 1.7 + float(x) * 0.015) * 14.0))
+				draw_polyline(pts, Color(0.30, 0.60, 1.0, 0.05), 2.0)
+			for i in 4:
+				var flip : float = 1.0 if i % 2 == 0 else -1.0
+				var fx : float = fmod(ot * (26.0 + float(i) * 9.0) + float(i * 157), 514.0) - 50.0
+				if flip < 0.0: fx = 414.0 - fx
+				var fy : float = 150.0 + float(i) * 190.0 + sin(ot * 1.5 + float(i)) * 10.0
+				var fc := Color(0.45, 0.75, 1.0, 0.09)
+				draw_set_transform(Vector2(fx, fy), 0.0, Vector2(flip, 1.0))
+				draw_circle(Vector2.ZERO, 7.0, fc)                       # body
+				draw_circle(Vector2(3.0, -1.0), 5.0, fc)                  # head taper
+				draw_polygon(PackedVector2Array([Vector2(-6, 0), Vector2(-13, -5), Vector2(-13, 5)]),
+					PackedColorArray([fc]))                               # tail
+				draw_set_transform(Vector2.ZERO)
+		9:  # Volcano — flame embers rising + dark peak silhouette
+			var vt := Time.get_ticks_msec() * 0.001
+			draw_polygon(PackedVector2Array([
+				Vector2(40, 896), Vector2(207, 660), Vector2(374, 896)]),
+				PackedColorArray([Color(0.0, 0.0, 0.0, 0.18)]))
+			draw_line(Vector2(190, 678), Vector2(224, 678), Color(1.0, 0.45, 0.08, 0.20), 3.0)
+			for i in 14:
+				var ex : float = fmod(float(i * 97 + 41) * 31.7 + sin(vt * 1.4 + float(i)) * 18.0, 414.0)
+				var ey : float = fmod(float(i * 59 + 11) * 47.1 - vt * (22.0 + float(i % 5) * 9.0), 896.0)
+				if ey < 0.0: ey += 896.0
+				var es : float = 3.0 + float(i % 3) * 1.5
+				var flick := sin(vt * 6.0 + float(i)) * es * 0.3
+				draw_polygon(PackedVector2Array([
+					Vector2(ex - es, ey), Vector2(ex + flick * 0.3, ey - es * 2.2 - flick),
+					Vector2(ex + es, ey)]),
+					PackedColorArray([Color(1.0, 0.45 + float(i % 3) * 0.12, 0.08, 0.10)]))
+		10:  # Timber — stacked log pile + tumbling wood chips
+			var wt3 := Time.get_ticks_msec() * 0.001
+			var lc2 := Color(0.85, 0.60, 0.25, 0.07)
+			# Log-end pyramid in the bottom corner
+			for lp : Vector2 in [Vector2(40, 858), Vector2(96, 858), Vector2(152, 858),
+					Vector2(68, 810), Vector2(124, 810), Vector2(96, 762)]:
+				draw_arc(lp, 26.0, 0, TAU, 22, lc2, 2.0, false)
+				draw_arc(lp, 15.0, 0, TAU, 16, Color(0.85, 0.60, 0.25, 0.05), 1.5, false)
+				draw_circle(lp, 4.0, Color(0.85, 0.60, 0.25, 0.06))
+			# A second smaller pile, top-right
+			for lp2 : Vector2 in [Vector2(330, 60), Vector2(380, 60), Vector2(355, 18)]:
+				draw_arc(lp2, 20.0, 0, TAU, 20, lc2, 1.8, false)
+				draw_circle(lp2, 3.0, Color(0.85, 0.60, 0.25, 0.06))
+			# Wood chips drifting down, tumbling
+			for i in 8:
+				var px4 : float = fmod(float(i * 131 + 41) * 27.9 + sin(wt3 * 0.7 + float(i)) * 14.0, 414.0)
+				var py4 : float = fmod(float(i * 79 + 13) * 43.7 + wt3 * (9.0 + float(i % 4) * 4.0), 896.0)
+				draw_set_transform(Vector2(px4, py4), wt3 * 1.2 + float(i) * 1.4)
+				draw_rect(Rect2(-5, -2, 10, 4), Color(0.85, 0.62, 0.30, 0.08), true)
+				draw_set_transform(Vector2.ZERO)
+		11:  # Galaxy — stars, spiral arms, a ringed planet and a shooting star
+			var gt := Time.get_ticks_msec() * 0.001
+			for i in 40:
+				var sx2 : float = fmod(float(i * 97 + 13) * 37.3, 414.0)
+				var sy2 : float = fmod(float(i * 53 + 71) * 19.7, 896.0)
+				var tw  : float = 0.05 + 0.15 * absf(sin(gt * 1.5 + float(i) * 1.1))
+				draw_rect(Rect2(sx2, sy2, 2.0, 2.0), Color(1, 1, 1, tw), true)
+			for i in 3:
+				draw_arc(Vector2(207, 448), 100.0 + float(i) * 90.0,
+					gt * 0.1 + float(i), gt * 0.1 + float(i) + PI * 1.2, 40,
+					Color(0.75, 0.35, 1.0, 0.05), 2.0, false)
+			# Ringed planet, top-right
+			draw_circle(Vector2(340, 130), 22.0, Color(0.75, 0.35, 1.0, 0.10))
+			draw_set_transform(Vector2(340, 130), -0.35, Vector2(1.0, 0.32))
+			draw_arc(Vector2.ZERO, 34.0, 0, TAU, 32, Color(0.85, 0.55, 1.0, 0.10), 2.0, false)
+			draw_set_transform(Vector2.ZERO)
+			# Shooting star every ~7s — random direction and path each time,
+			# streaking across the whole screen (behind the play area)
+			var sw := fmod(gt, 7.0)
+			if sw < 1.4:
+				var k := sw / 1.4
+				var shot := int(gt / 7.0)
+				var h2 := absi(shot * 2654435761)
+				var ang := float(h2 % 628) * 0.01
+				# Aim through a random interior point so every streak crosses the screen
+				var target := Vector2(80.0 + float((h2 / 7) % 254), 180.0 + float((h2 / 13) % 530))
+				var dir := Vector2(cos(ang), sin(ang))
+				var sp := target - dir * 600.0 + dir * 1200.0 * k
+				var fade := sin(k * PI)
+				draw_line(sp, sp - dir * (48.0 + 22.0 * fade), Color(1, 1, 1, 0.30 * fade), 2.0)
+				draw_line(sp, sp - dir * 20.0, Color(1, 1, 1, 0.45 * fade), 3.0)
+				draw_circle(sp, 2.6, Color(1, 1, 1, 0.60 * fade))
+		12:  # The Hive — faint honeycomb lattice + busy bees
+			var ht := Time.get_ticks_msec() * 0.001
+			var hex_col := Color(1.0, 0.75, 0.20, 0.05)
+			for row in 7:
+				for hx in 4:
+					var hcx := 50.0 + float(hx) * 105.0 + (52.0 if row % 2 == 1 else 0.0)
+					var hcy := 70.0 + float(row) * 125.0
+					var pts := PackedVector2Array()
+					for i in 7:
+						var a := PI / 6.0 + float(i) * PI / 3.0
+						pts.append(Vector2(hcx, hcy) + Vector2(cos(a), sin(a)) * 38.0)
+					draw_polyline(pts, hex_col, 1.5)
+			for b in 2:
+				var bx := 207.0 + sin(ht * (0.5 + float(b) * 0.2) + float(b) * 3.0) * 160.0
+				var by := 300.0 + float(b) * 280.0 + cos(ht * 0.7 + float(b)) * 90.0
+				draw_circle(Vector2(bx, by), 5.0, Color(1.0, 0.85, 0.25, 0.15))
+				draw_line(Vector2(bx - 4, by), Vector2(bx + 4, by), Color(0.1, 0.08, 0.02, 0.18), 2.0)
+				var wf := absf(sin(ht * 14.0 + float(b)))
+				draw_circle(Vector2(bx, by - 5.0 - wf * 2.0), 3.0, Color(1, 1, 1, 0.10))
+		13:  # Arcade — coarse pixel grid + floating pixel pluses
+			for gx2 in range(0, 414, 32):
+				draw_line(Vector2(gx2, 0), Vector2(gx2, 896), Color(0.40, 1.0, 0.90, 0.030), 1.0)
+			for gy2 in range(0, 896, 32):
+				draw_line(Vector2(0, gy2), Vector2(414, gy2), Color(0.40, 1.0, 0.90, 0.030), 1.0)
+			var at := Time.get_ticks_msec() * 0.001
+			for i in 6:
+				var px2 : float = fmod(float(i * 131 + 37) * 31.7, 414.0)
+				var py2 : float = fmod(float(i * 89 + 17) * 47.3 - at * (8.0 + float(i % 3) * 4.0), 896.0)
+				if py2 < 0.0: py2 += 896.0
+				var ps := 7.0
+				var pc := Color(0.40, 1.0, 0.90, 0.06) if i % 2 == 0 else Color(1.0, 0.45, 0.85, 0.06)
+				draw_rect(Rect2(px2 - ps * 0.5, py2 - ps * 1.5, ps, ps * 3.0), pc, true)
+				draw_rect(Rect2(px2 - ps * 1.5, py2 - ps * 0.5, ps * 3.0, ps), pc, true)
+		14:  # Bubble Bath — bubbles of all sizes rising
+			var bt2 := Time.get_ticks_msec() * 0.001
+			for i in 14:
+				var bx2 : float = fmod(float(i * 131 + 31) * 23.9 + sin(bt2 * 0.6 + float(i)) * 18.0, 414.0)
+				var by2 : float = fmod(float(i * 73 + 7) * 41.3 - bt2 * (14.0 + float(i % 5) * 7.0), 896.0)
+				if by2 < 0.0: by2 += 896.0
+				var br2 := 8.0 + float(i % 4) * 9.0
+				draw_arc(Vector2(bx2, by2), br2, 0, TAU, 20, Color(1, 1, 1, 0.08), 1.5, false)
+				draw_circle(Vector2(bx2 - br2 * 0.35, by2 - br2 * 0.35), br2 * 0.18, Color(1, 1, 1, 0.08))
+		15:  # Thunderstorm — driving rain + cloud bank + lightning flashes
+			var tt := Time.get_ticks_msec() * 0.001
+			for i in 3:
+				draw_circle(Vector2(70.0 + float(i) * 140.0, 40.0 + float(i % 2) * 22.0), 55.0,
+					Color(0.60, 0.70, 0.90, 0.05))
+			for i in 22:
+				var rx2 : float = fmod(float(i * 97 + 13) * 37.3 - tt * 30.0, 414.0)
+				if rx2 < 0.0: rx2 += 414.0
+				var ry2 : float = fmod(float(i * 53 + 71) * 19.7 + tt * (180.0 + float(i % 5) * 40.0), 896.0)
+				draw_line(Vector2(rx2, ry2), Vector2(rx2 - 6.0, ry2 + 16.0), Color(0.70, 0.80, 1.0, 0.08), 1.3)
+			var lf := fmod(tt, 6.0)
+			if lf < 0.18:
+				var fl := 1.0 - lf / 0.18
+				draw_rect(Rect2(Vector2.ZERO, Vector2(414, 896)), Color(1, 1, 1, 0.05 * fl), true)
+				draw_polyline(PackedVector2Array([Vector2(290, 0), Vector2(255, 160), Vector2(285, 185), Vector2(240, 360)]),
+					Color(1.0, 1.0, 0.80, 0.20 * fl), 2.5)
+		16:  # Blossom — drifting petals + blossom branch
+			var pt2 := Time.get_ticks_msec() * 0.001
+			var br3 := Color(0.30, 0.18, 0.14, 0.25)
+			draw_line(Vector2(414, 70), Vector2(250, 130), br3, 4.0)
+			draw_line(Vector2(310, 108), Vector2(280, 60), br3, 2.5)
+			for i in 4:
+				draw_circle(Vector2(280.0 + float(i) * 32.0, 70.0 + float(i % 2) * 38.0), 7.0,
+					Color(1.0, 0.78, 0.85, 0.12))
+			for i in 10:
+				var px3 : float = fmod(float(i * 131 + 31) * 23.9 + sin(pt2 * 0.8 + float(i)) * 26.0, 414.0)
+				var py3 : float = fmod(float(i * 73 + 7) * 41.3 + pt2 * (12.0 + float(i % 4) * 6.0), 896.0)
+				var rot2 := pt2 * 0.8 + float(i) * 1.3
+				draw_set_transform(Vector2(px3, py3), rot2)
+				draw_polygon(PackedVector2Array([Vector2(0, -5), Vector2(3.5, 0), Vector2(0, 5), Vector2(-3.5, 0)]),
+					PackedColorArray([Color(1.0, 0.82, 0.88, 0.10)]))
+				draw_set_transform(Vector2.ZERO)
+		17:  # The Vault — coins flipping + sparkles
+			var vt2 := Time.get_ticks_msec() * 0.001
+			for i in 5:
+				var cx2 : float = fmod(float(i * 113 + 29) * 37.1, 414.0)
+				var cy2 : float = fmod(float(i * 67 + 43) * 45.9 - vt2 * (10.0 + float(i % 3) * 5.0), 896.0)
+				if cy2 < 0.0: cy2 += 896.0
+				var flip := sin(vt2 * 1.5 + float(i) * 1.7)
+				draw_set_transform(Vector2(cx2, cy2), 0.0, Vector2(maxf(absf(flip), 0.12), 1.0))
+				draw_arc(Vector2.ZERO, 13.0, 0, TAU, 20, Color(1.0, 0.85, 0.40, 0.10), 2.0, false)
+				draw_arc(Vector2.ZERO, 8.0, 0, TAU, 16, Color(1.0, 0.85, 0.40, 0.07), 1.5, false)
+				draw_set_transform(Vector2.ZERO)
+			for i in 6:
+				var sx3 : float = fmod(float(i * 97 + 13) * 41.3, 414.0)
+				var sy3 : float = fmod(float(i * 53 + 71) * 23.7, 896.0)
+				var tw2 : float = 0.05 + 0.10 * absf(sin(vt2 * 2.0 + float(i) * 1.4))
+				draw_line(Vector2(sx3 - 5, sy3), Vector2(sx3 + 5, sy3), Color(1.0, 0.95, 0.6, tw2), 1.0)
+				draw_line(Vector2(sx3, sy3 - 5), Vector2(sx3, sy3 + 5), Color(1.0, 0.95, 0.6, tw2), 1.0)
+		18:  # Swamp — murk bands, rising goo bubbles, drips from above
+			var wt2 := Time.get_ticks_msec() * 0.001
+			for i in 4:
+				draw_rect(Rect2(0, 650.0 + float(i) * 70.0, 414, 40), Color(0.30, 0.55, 0.20, 0.03 + float(i) * 0.012), true)
+			for i in 10:
+				var gx3 : float = fmod(float(i * 131 + 37) * 29.7 + sin(wt2 + float(i)) * 10.0, 414.0)
+				var gy3 : float = fmod(float(i * 89 + 17) * 47.3 - wt2 * (10.0 + float(i % 4) * 5.0), 896.0)
+				if gy3 < 0.0: gy3 += 896.0
+				draw_arc(Vector2(gx3, gy3), 4.0 + float(i % 3) * 3.0, 0, TAU, 12, Color(0.55, 0.95, 0.35, 0.08), 1.5, false)
+			for i in 3:
+				var dx2 := 80.0 + float(i) * 130.0
+				var dk2 := fmod(wt2 * 0.30 + float(i) * 0.37, 1.0)
+				# Ooze down, then retract — no sudden vanish
+				var dkk := (dk2 / 0.6) if dk2 < 0.6 else (1.0 - (dk2 - 0.6) / 0.4)
+				if dkk > 0.02:
+					var dl := 60.0 * dkk
+					draw_line(Vector2(dx2, 0), Vector2(dx2, dl), Color(0.45, 0.85, 0.30, 0.10), 4.0 * (0.55 + 0.45 * dkk))
+					draw_circle(Vector2(dx2, dl), 4.0 * (0.55 + 0.45 * dkk), Color(0.55, 0.95, 0.35, 0.12))
+		19:  # Dance Floor — pulsing checkerboard + sweeping light beams
+			var dt2 := Time.get_ticks_msec() * 0.001
+			var tile := 59.0
+			for ty in 3:
+				for tx in 7:
+					var hue2 := fmod(float(tx + ty) * 0.09 + dt2 * 0.10, 1.0)
+					var pulse2 := 0.04 + 0.05 * absf(sin(dt2 * 1.6 + float(tx * 3 + ty) * 1.1))
+					draw_rect(Rect2(float(tx) * tile, 720.0 + float(ty) * tile, tile - 2.0, tile - 2.0),
+						Color.from_hsv(hue2, 0.6, 1.0, pulse2), true)
+			for i in 3:
+				var ba := PI * 0.5 + sin(dt2 * 0.7 + float(i) * 2.1) * 0.6
+				var origin := Vector2(70.0 + float(i) * 137.0, 0.0)
+				var tip2 := origin + Vector2(cos(ba), sin(ba)) * 700.0
+				var hue3 := fmod(float(i) * 0.30 + dt2 * 0.08, 1.0)
+				draw_polygon(PackedVector2Array([origin, tip2 + Vector2(-40, 0), tip2 + Vector2(40, 0)]),
+					PackedColorArray([Color.from_hsv(hue3, 0.5, 1.0, 0.05)]))
 
 func _draw_slot(i: int) -> void:
 	var sx   : float = i * SLOT_W
-	var rect := Rect2(sx + 6, TRAY_Y, SLOT_W - 12, TRAY_H)
+	var rect := Rect2(sx + 6, TRAY_Y + 8, SLOT_W - 12, TRAY_H - 16)
+	# Spawn bounce: cards puff up briefly when a fresh set arrives (staggered)
+	if tray_pop_t > 0.0:
+		var lt := clampf(tray_pop_t + float(i) * 0.12, 0.0, 1.0)
+		rect = rect.grow(sin(lt * PI) * 5.0)
 	var bg   : Color = Color(0.18, 0.14, 0.24) if dragging_slot == i else Color(0.11, 0.09, 0.16)
-	draw_rect(rect, bg, true)
-	draw_rect(rect, Color(1, 1, 1, 0.05), false, 1.0)
+	_rr_fill(Rect2(rect.position + Vector2(0, 3), rect.size), 16.0, Color(0, 0, 0, 0.30))
+	_rr_fill(rect, 16.0, bg)
+	_rr_outline(rect, 16.0, Color(1, 1, 1, 0.07), 1.5)
 
 	if placed[i]:
 		return
@@ -585,13 +1184,19 @@ func _draw_slot(i: int) -> void:
 		if dragging_slot == i:
 			draw_rect(Rect2(rx, ry, tcell, tcell), color, true)
 		else:
-			_draw_styled_block(Rect2(rx, ry, tcell, tcell), color)
+			_draw_styled_block(Rect2(rx, ry, tcell, tcell), color,
+				pieces[i].get("pattern", 0) + cell[0] * 7 + cell[1] * 13)
 
-func _draw_dragging_piece() -> void:
+# Draws on drag_layer (above the grid) — the piece floats DRAG_LIFT px above
+# the finger so it's never hidden under the player's hand
+func _draw_drag_layer() -> void:
+	if dragging_slot < 0 or placed[dragging_slot]:
+		return
+	var lifted := drag_pos + Vector2(0, -DRAG_LIFT)
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
-	var snap  : Vector2i = _get_snap(drag_pos, shape)
-	var over  : bool     = _is_over_grid(drag_pos)
+	var snap  : Vector2i = _get_snap(lifted, shape)
+	var over  : bool     = _is_over_grid(lifted)
 	var valid : bool     = over and grid.can_place(shape, snap.y, snap.x)
 
 	var ox : float
@@ -607,71 +1212,71 @@ func _draw_dragging_piece() -> void:
 			if (cell[0] as int) > max_c: max_c = cell[0]
 			if (cell[1] as int) < min_r: min_r = cell[1]
 			if (cell[1] as int) > max_r: max_r = cell[1]
-		ox = drag_pos.x - (max_c - min_c + 1) * GRID_STEP * 0.5 - min_c * GRID_STEP
-		oy = drag_pos.y - (max_r - min_r + 1) * GRID_STEP * 0.5 - min_r * GRID_STEP
+		ox = lifted.x - (max_c - min_c + 1) * GRID_STEP * 0.5 - min_c * GRID_STEP
+		oy = lifted.y - (max_r - min_r + 1) * GRID_STEP * 0.5 - min_r * GRID_STEP
 
 	var draw_color : Color = color if (valid or not over) else Color(0.9, 0.2, 0.2, 0.7)
 
+	# Pickup pop: piece swells briefly when grabbed
+	var pop := 1.0 + sin(drag_pop_t * PI) * 0.10
+	var pat : int = pieces[dragging_slot].get("pattern", 0)
 	for cell in shape:
 		var rx : float = ox + cell[0] * GRID_STEP
 		var ry : float = oy + cell[1] * GRID_STEP
-		_draw_styled_block(Rect2(rx, ry, CELL, CELL), draw_color)
+		var cr := Rect2(rx, ry, CELL, CELL)
+		if pop > 1.001:
+			cr = cr.grow(CELL * (pop - 1.0) * 0.5)
+		# Pattern sampled in BOARD space (grid-local coords) so continuous
+		# skins show, while hovering, exactly the pattern that will land
+		var pat_r := Rect2(Vector2(rx - GRID_X, ry - GRID_Y), Vector2(CELL, CELL))
+		BlockSkins.paint(drag_layer, grid.block_style, cr, draw_color,
+			pat + cell[0] * 7 + cell[1] * 13, 0.0, pat_r)
 
-# ── Block style renderer (mirrors Grid.gd styles, proportional to rect size) ─
-func _draw_styled_block(r: Rect2, col: Color) -> void:
-	var s := r.size.x
-	match grid.block_style:
-		0:  # PASTEL
-			draw_rect(Rect2(r.position + Vector2(s*0.04, s*0.04), r.size + Vector2(s*0.07, s*0.07)), Color(0,0,0,0.18), true)
-			draw_rect(r, col.lightened(0.28), true)
-			draw_rect(Rect2(r.position, Vector2(r.size.x, s*0.12)), col.lightened(0.65), true)
-			draw_rect(Rect2(r.position, Vector2(s*0.12, r.size.y)), col.lightened(0.65), true)
-			draw_rect(Rect2(r.position + Vector2(0, r.size.y - s*0.10), Vector2(r.size.x, s*0.10)), col.darkened(0.12), true)
-			draw_rect(Rect2(r.position + Vector2(r.size.x - s*0.10, 0), Vector2(s*0.10, r.size.y)), col.darkened(0.12), true)
-			draw_rect(Rect2(r.position + r.size * 0.18, Vector2(s*0.18, s*0.18)), col.lightened(0.80), true)
-		1:  # NEON
-			draw_rect(r.grow(s*0.18), Color(col.r, col.g, col.b, 0.05), true)
-			draw_rect(r.grow(s*0.09), Color(col.r, col.g, col.b, 0.12), true)
-			draw_rect(r.grow(s*0.05), Color(col.r, col.g, col.b, 0.22), true)
-			draw_rect(r, col.darkened(0.82), true)
-			draw_rect(r, col, false, 2.0)
-			draw_rect(Rect2(r.position + Vector2(s*0.09, s*0.09), Vector2(s*0.13, s*0.13)), col.lightened(0.45), true)
-		2:  # CIRCUIT
-			draw_rect(Rect2(r.position + Vector2(s*0.05, s*0.05), r.size + Vector2(s*0.09, s*0.09)), Color(0,0,0,0.40), true)
-			draw_rect(r, col.darkened(0.32), true)
-			draw_rect(Rect2(r.position, Vector2(r.size.x, s*0.09)), col.lightened(0.38), true)
-			draw_rect(Rect2(r.position, Vector2(s*0.09, r.size.y)), col.lightened(0.38), true)
-			draw_rect(Rect2(r.position + Vector2(0, r.size.y - s*0.07), Vector2(r.size.x, s*0.07)), col.darkened(0.52), true)
-			draw_rect(Rect2(r.position + Vector2(r.size.x - s*0.07, 0), Vector2(s*0.07, r.size.y)), col.darkened(0.52), true)
-			var lc := Color(col.r, col.g, col.b, 0.55)
-			var y1 := r.position.y + r.size.y * 0.38
-			var x1 := r.position.x + r.size.x * 0.40
-			draw_line(Vector2(r.position.x + s*0.12, y1), Vector2(r.end.x - s*0.12, y1), lc, 1.0)
-			draw_line(Vector2(x1, r.position.y + s*0.12), Vector2(x1, r.end.y - s*0.12), lc, 1.0)
-			draw_rect(Rect2(Vector2(x1 - s*0.05, y1 - s*0.05), Vector2(s*0.10, s*0.10)), col.lightened(0.65), true)
-		3:  # BRICK
-			draw_rect(Rect2(r.position + Vector2(s*0.07, s*0.07), r.size + Vector2(s*0.14, s*0.14)), Color(0,0,0,0.50), true)
-			draw_rect(r, col.darkened(0.48), true)
-			var inner := r.grow(-s*0.09)
-			draw_rect(inner, col.darkened(0.08), true)
-			draw_rect(Rect2(inner.position, Vector2(inner.size.x, s*0.09)), col.lightened(0.30), true)
-			draw_rect(Rect2(inner.position, Vector2(s*0.09, inner.size.y)), col.lightened(0.24), true)
-			draw_rect(Rect2(inner.position + Vector2(0, inner.size.y - s*0.09), Vector2(inner.size.x, s*0.09)), col.darkened(0.58), true)
-			draw_rect(Rect2(inner.position + Vector2(inner.size.x - s*0.09, 0), Vector2(s*0.09, inner.size.y)), col.darkened(0.58), true)
-		4:  # CRYSTAL
-			draw_rect(Rect2(r.position + Vector2(s*0.05, s*0.05), r.size + Vector2(s*0.09, s*0.09)), Color(0,0,0,0.45), true)
-			draw_rect(r, col, true)
-			var tl  := r.position
-			var tr  := r.position + Vector2(r.size.x, 0)
-			var bl  := r.position + Vector2(0, r.size.y)
-			var br  := r.end
-			var ctr := r.get_center()
-			draw_polygon(PackedVector2Array([tl, tr, ctr]), PackedColorArray([col.lightened(0.55), col.lightened(0.28), col.lightened(0.12)]))
-			draw_polygon(PackedVector2Array([tl, bl, ctr]), PackedColorArray([col.lightened(0.38), col.lightened(0.08), col.lightened(0.12)]))
-			draw_polygon(PackedVector2Array([tr, br, ctr]), PackedColorArray([col.darkened(0.18), col.darkened(0.38), col.darkened(0.08)]))
-			draw_polygon(PackedVector2Array([bl, br, ctr]), PackedColorArray([col.darkened(0.22), col.darkened(0.52), col.darkened(0.12)]))
-			draw_rect(r, col.lightened(0.50), false, 1.0)
-			draw_rect(Rect2(ctr - Vector2(s*0.07, s*0.07), Vector2(s*0.14, s*0.14)), Color(1,1,1,0.65), true)
+# ── Rounded drawing helpers (Game.gd copy of Grid.gd's) ──────────────────────
+func _rr_points(r: Rect2, rad: float) -> PackedVector2Array:
+	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
+	var pts := PackedVector2Array()
+	var corners := [
+		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
+		[Vector2(r.end.x - rad, r.position.y + rad),          PI * 1.5,  TAU],
+		[r.end - Vector2(rad, rad),                           0.0,       PI * 0.5],
+		[Vector2(r.position.x + rad, r.end.y - rad),          PI * 0.5,  PI],
+	]
+	for cn in corners:
+		for i in 4:
+			var a : float = lerpf(cn[1], cn[2], float(i) / 3.0)
+			pts.append(cn[0] + Vector2(cos(a), sin(a)) * rad)
+	return pts
+
+func _rr_fill(r: Rect2, rad: float, col: Color) -> void:
+	draw_polygon(_rr_points(r, rad), PackedColorArray([col]))
+
+func _rr_outline(r: Rect2, rad: float, col: Color, width: float) -> void:
+	var pts := _rr_points(r, rad)
+	pts.append(pts[0])
+	draw_polyline(pts, col, width)
+
+func _rr_grad(r: Rect2, rad: float, top_col: Color, bot_col: Color) -> void:
+	var pts  := _rr_points(r, rad)
+	var cols := PackedColorArray()
+	for p in pts:
+		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
+	draw_polygon(pts, cols)
+
+func _draw_gear_button() -> void:
+	var c := GEAR_RECT.get_center()
+	_rr_fill(GEAR_RECT, 12.0, Color(0, 0, 0, 0.30))
+	_rr_outline(GEAR_RECT, 12.0, Color(1, 1, 1, 0.15), 1.5)
+	var gear_col := Color(1, 1, 1, 0.65)
+	draw_arc(c, 9.0, 0, TAU, 24, gear_col, 3.0, false)
+	draw_circle(c, 3.0, gear_col)
+	for i in 8:
+		var a := float(i) / 8.0 * TAU
+		draw_line(c + Vector2(cos(a), sin(a)) * 9.0, c + Vector2(cos(a), sin(a)) * 13.0, gear_col, 3.0)
+
+# ── Block style renderer — all skins live in BlockSkins.gd (shared) ─────────
+func _draw_styled_block(r: Rect2, col: Color, seed_v: int = 0) -> void:
+	BlockSkins.paint(self, grid.block_style, r, col, seed_v)
 
 func _is_over_grid(pos: Vector2) -> bool:
 	return pos.x >= GRID_X and pos.x <= GRID_X + GRID_COLS * GRID_STEP \
@@ -690,13 +1295,20 @@ func _show_score_popup(amount: int, cleared_lines: int, multiplier: int) -> void
 	else:
 		pop_color = Color(1, 1, 1, 0.9)
 	lbl.add_theme_color_override("font_color", pop_color)
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	lbl.add_theme_constant_override("outline_size", 6)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.size     = Vector2(260, 60)
-	lbl.position = Vector2(77, 120)
+	lbl.size         = Vector2(260, 60)
+	lbl.position     = Vector2(77, 120)
+	lbl.pivot_offset = Vector2(130, 30)
+	lbl.scale        = Vector2(0.4, 0.4)
 	ui.add_child(lbl)
+	var drift := randf_range(-26.0, 26.0)
 	var t := create_tween()
-	t.tween_property(lbl, "position", Vector2(77, 60), 0.7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(lbl, "modulate", Color(pop_color.r, pop_color.g, pop_color.b, 0.0), 0.7)
+	t.tween_property(lbl, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_property(lbl, "position", Vector2(77 + drift, 60), 0.6).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(lbl, "rotation_degrees", drift * 0.18, 0.6).set_trans(Tween.TRANS_SINE)
+	t.parallel().tween_property(lbl, "modulate", Color(pop_color.r, pop_color.g, pop_color.b, 0.0), 0.6)
 	t.tween_callback(lbl.queue_free)
 
 func _show_clear_text(lines: int) -> void:
@@ -711,7 +1323,7 @@ func _show_clear_text(lines: int) -> void:
 
 	if lines == 1:
 		text   = "NICE!"
-		color  = Color(1.00, 1.00, 1.00, 1.0)
+		color  = THEMES[_visual_idx()]["accent"]   # single-line clears speak the theme's colour
 		fsize  = 38
 		bounce = 1.18
 		hold   = 0.30
@@ -769,17 +1381,22 @@ func _show_clear_text(lines: int) -> void:
 	lbl.text = text
 	lbl.add_theme_font_size_override("font_size", fsize)
 	lbl.add_theme_color_override("font_color", color)
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	lbl.add_theme_constant_override("outline_size", 10)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.size         = Vector2(w, h)
 	lbl.position     = Vector2(px, py)
 	lbl.scale        = Vector2(0.05, 0.05)
 	lbl.pivot_offset = Vector2(w * 0.5, h * 0.5)
+	lbl.rotation_degrees = randf_range(-6.0, 6.0)
 	ui.add_child(lbl)
 
 	var t := create_tween()
-	# Pop in with bounce
+	# Pop in with bounce + straighten with an elastic wobble
 	t.tween_property(lbl, "scale", Vector2(bounce, bounce), 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(lbl, "rotation_degrees", -lbl.rotation_degrees * 0.5, 0.16)
 	t.tween_property(lbl, "scale", Vector2(1.0, 1.0), 0.10).set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(lbl, "rotation_degrees", 0.0, 0.22).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 
 	# Extra wobble for big clears
 	if lines >= 3:
@@ -807,9 +1424,11 @@ func _show_clear_text(lines: int) -> void:
 
 func _show_board_clear_popup() -> void:
 	var lbl := Label.new()
-	lbl.text = "BOARD CLEAR!"
+	lbl.text = "BOARD CLEAR!  +" + str(BOARD_CLEAR_PTS)
 	lbl.add_theme_font_size_override("font_size", 42)
 	lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.0, 1.0))
+	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	lbl.add_theme_constant_override("outline_size", 8)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.size     = Vector2(320, 70)
 	lbl.position = Vector2(47, 320)
@@ -821,26 +1440,77 @@ func _show_board_clear_popup() -> void:
 
 func _update_combo_label() -> void:
 	if combo >= 2:
-		combo_label.text = str(combo) + "x COMBO"
+		var mult := minf(1.0 + STREAK_STEP * float(combo - 1), STREAK_CAP)
+		combo_label.text = "STREAK  ×" + _fmt_mult(mult)
+		combo_label.add_theme_color_override("font_color",
+			Color(1.0, 0.72, 0.20).lerp(THEMES[_visual_idx()]["accent"], 0.35))
 		combo_label.scale = Vector2(1.3, 1.3)
 		var t := create_tween()
 		t.tween_property(combo_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK)
+	elif streak_lost_t > 0.0:
+		combo_label.text = "STREAK LOST"
+		combo_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
 	else:
 		combo_label.text = ""
 
+func _fmt_mult(m: float) -> String:
+	var s := String.num(m, 2)
+	if s.contains("."):
+		s = s.rstrip("0").rstrip(".")
+	return s
+
+# Flame + pill behind the ComboLabel text (label renders above on the
+# CanvasLayer). Flickers while hot, greys out during the streak-lost flash.
+func _draw_streak_meter() -> void:
+	var lost := combo < 2
+	var a : float = streak_lost_t if lost else 1.0
+	if a <= 0.0:
+		return
+	var pill := Rect2(112, 558, 190, 34)
+	var hot  := clampf(float(combo - 2) / 6.0, 0.0, 1.0)
+	var col  : Color = Color(0.55, 0.55, 0.60) if lost else Color(1.0, 0.72, 0.20).lerp(Color(1.0, 0.30, 0.15), hot)
+	_rr_fill(pill, 17.0, Color(0, 0, 0, 0.40 * a))
+	_rr_outline(pill, 17.0, Color(col.r, col.g, col.b, 0.55 * a), 1.5)
+	# Cartoon flame at the left end
+	var fx := Vector2(pill.position.x + 22.0, pill.get_center().y + 4.0)
+	var flick := sin(Time.get_ticks_msec() * 0.012) * 2.0 if not lost else 0.0
+	var tip := fx + Vector2(flick * 0.4, -16.0 - flick)
+	draw_polygon(PackedVector2Array([fx + Vector2(-8, 0), tip, fx + Vector2(8, 0)]),
+		PackedColorArray([Color(col.r, col.g, col.b, 0.9 * a)]))
+	draw_circle(fx, 8.0, Color(col.r, col.g, col.b, 0.9 * a))
+	if not lost:
+		draw_circle(fx + Vector2(0, 1.5), 4.5, Color(1.0, 0.92, 0.45, 0.95 * a))
+		draw_circle(fx + Vector2(0, 2.5), 2.0, Color(1, 1, 1, 0.9 * a))
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 func _game_over() -> void:
+	run_over = true
 	GameState.snapshot(grid.cells, score, pieces, placed,
-		sets_given, lines_cleared, theme_idx, combo)
+		sets_given, lines_cleared, theme_idx, combo, placements,
+		max_combo, board_clears, grid.seeds)
+	GameState.clear_run()
+	GameState.finish_run(placements, score, lines_cleared, max_combo, board_clears)
 	GameState.record_final_score(score)
+	Sfx.play_game_over()
+	_buzz(140)
 	await get_tree().create_timer(0.9).timeout
 	get_tree().change_scene_to_file("res://scenes/GameOver.tscn")
+
+# Auto-save the run after every placement so leaving to the menu (or the app
+# being killed) never loses progress. Cleared on game over.
+func _save_run() -> void:
+	if run_over:
+		return
+	GameState.snapshot(grid.cells, score, pieces, placed,
+		sets_given, lines_cleared, theme_idx, combo, placements,
+		max_combo, board_clears, grid.seeds)
+	GameState.save_run_to_disk()
 
 func _pop_score(gained: int) -> void:
 	score_label.scale = Vector2(1.25, 1.25)
 	var t := create_tween()
 	t.tween_property(score_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK)
-	if gained > 20:
+	if gained > 100:
 		score_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.15))
 		await get_tree().create_timer(0.4).timeout
 		score_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
@@ -848,3 +1518,147 @@ func _pop_score(gained: int) -> void:
 func _refresh_best() -> void:
 	if GameState.best_score > 0:
 		best_label.text = "BEST  " + str(GameState.best_score)
+
+# ── Pause / settings overlay ─────────────────────────────────────────────────
+func _make_chunky_button(label_text: String, fill: Color, font_size: int = 20) -> Button:
+	var b := Button.new()
+	b.text = label_text
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = fill
+	sb.set_corner_radius_all(18)
+	sb.border_width_bottom = 6
+	sb.border_color = fill.darkened(0.40)
+	var sb_hover := sb.duplicate()
+	sb_hover.bg_color = fill.lightened(0.10)
+	var sb_press := sb.duplicate()
+	sb_press.bg_color = fill.darkened(0.10)
+	sb_press.border_width_bottom = 2
+	b.add_theme_stylebox_override("normal", sb)
+	b.add_theme_stylebox_override("hover", sb_hover)
+	b.add_theme_stylebox_override("pressed", sb_press)
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.add_theme_font_size_override("font_size", font_size)
+	var fc := Color(0.08, 0.06, 0.12)
+	b.add_theme_color_override("font_color", fc)
+	b.add_theme_color_override("font_hover_color", fc)
+	b.add_theme_color_override("font_pressed_color", fc)
+	_add_press_effect(b)
+	return b
+
+# Press-and-hold sinks the button face by the same 5px the bottom edge
+# collapses, so it physically pushes in; release springs it back out.
+func _add_press_effect(b: Button) -> void:
+	b.button_down.connect(func():
+		Sfx.play_tick()
+		if b.has_meta("press_tw"):
+			var old: Tween = b.get_meta("press_tw")
+			if old and old.is_valid(): old.kill()
+		b.set_meta("press_y", b.position.y)
+		var t := b.create_tween()
+		b.set_meta("press_tw", t)
+		t.tween_property(b, "position:y", b.position.y + 5.0, 0.05).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT))
+	b.button_up.connect(func():
+		if not b.has_meta("press_y"):
+			return
+		if b.has_meta("press_tw"):
+			var old: Tween = b.get_meta("press_tw")
+			if old and old.is_valid(): old.kill()
+		var t := b.create_tween()
+		b.set_meta("press_tw", t)
+		t.tween_property(b, "position:y", float(b.get_meta("press_y")), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
+
+func _build_pause_menu() -> void:
+	pause_menu = Control.new()
+	pause_menu.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.visible = false
+	ui.add_child(pause_menu)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.65)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.add_child(dim)
+
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.12, 0.10, 0.18)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.06, 0.05, 0.10)
+	psb.content_margin_left = 28; psb.content_margin_right = 28
+	psb.content_margin_top = 24;  psb.content_margin_bottom = 28
+	panel.add_theme_stylebox_override("panel", psb)
+	panel.position = Vector2(57, 250)
+	panel.custom_minimum_size = Vector2(300, 0)
+	pause_menu.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "PAUSED"
+	title.add_theme_font_size_override("font_size", 32)
+	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var resume := _make_chunky_button("RESUME", Color(0.20, 0.85, 0.45))
+	resume.custom_minimum_size = Vector2(0, 56)
+	resume.pressed.connect(_toggle_pause_menu)
+	vbox.add_child(resume)
+
+	var snd := _make_chunky_button(_sound_text(), Color(0.20, 0.75, 0.95))
+	snd.custom_minimum_size = Vector2(0, 56)
+	snd.pressed.connect(func():
+		GameState.set_sound(not GameState.sound_on)
+		snd.text = _sound_text()
+		Sfx.play_click())
+	vbox.add_child(snd)
+
+	var mus := _make_chunky_button(_music_text(), Color(0.65, 0.30, 0.95))
+	mus.custom_minimum_size = Vector2(0, 56)
+	mus.pressed.connect(func():
+		GameState.set_music(not GameState.music_on)
+		Sfx.update_music()
+		mus.text = _music_text()
+		Sfx.play_click())
+	vbox.add_child(mus)
+
+	var hap := _make_chunky_button(_haptics_text(), Color(0.95, 0.75, 0.15))
+	hap.custom_minimum_size = Vector2(0, 56)
+	hap.pressed.connect(func():
+		GameState.set_haptics(not GameState.haptics_on)
+		hap.text = _haptics_text()
+		_buzz(30)
+		Sfx.play_click())
+	vbox.add_child(hap)
+
+	var menu := _make_chunky_button("MAIN MENU", Color(0.90, 0.30, 0.40))
+	menu.custom_minimum_size = Vector2(0, 56)
+	menu.pressed.connect(func():
+		Sfx.play_click()
+		get_tree().change_scene_to_file("res://scenes/MainMenu.tscn"))
+	vbox.add_child(menu)
+
+func _sound_text() -> String:
+	return "SOUND: ON" if GameState.sound_on else "SOUND: OFF"
+
+func _music_text() -> String:
+	return "MUSIC: ON" if GameState.music_on else "MUSIC: OFF"
+
+func _haptics_text() -> String:
+	return "HAPTICS: ON" if GameState.haptics_on else "HAPTICS: OFF"
+
+func _toggle_pause_menu() -> void:
+	menu_open = not menu_open
+	pause_menu.visible = menu_open
+	Sfx.play_click()
+	if menu_open and dragging_slot >= 0:
+		dragging_slot = -1
+		grid.clear_ghost()
+	if menu_open:
+		# Pop-in bounce
+		pause_menu.scale = Vector2(0.85, 0.85)
+		pause_menu.pivot_offset = Vector2(207, 448)
+		var t := create_tween()
+		t.tween_property(pause_menu, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)

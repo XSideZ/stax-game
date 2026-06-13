@@ -11,14 +11,16 @@ config_version=5
 [application]
 
 config/name="STAX"
-config/version="0.1.0"
-run/main_scene="res://scenes/Game.tscn"
+config/version="2.0.0"
+run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
 
 GameState="*res://scripts/GameState.gd"
+Sfx="*res://scripts/Sfx.gd"
+Ads="*res://scripts/Ads.gd"
 
 [display]
 
@@ -26,6 +28,10 @@ window/size/viewport_width=414
 window/size/viewport_height=896
 window/stretch/mode="canvas_items"
 window/handheld/orientation="portrait"
+
+[gui]
+
+theme/custom_font="res://assets/fonts/baloo2_semibold.tres"
 
 [rendering]
 
