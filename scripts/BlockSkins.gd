@@ -890,9 +890,30 @@ static func _disco(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	rr_outline(ci, r, rad, col.lightened(0.40), 1.5)
 
 # ── 20 CAT (secret: cartoony/anime kitty face, blinks + ear-twitch) ──────────
+const CAT_COATS : Array = [
+	Color(0.96, 0.64, 0.32),   # ginger
+	Color(0.66, 0.66, 0.70),   # grey
+	Color(0.97, 0.91, 0.79),   # cream
+	Color(0.58, 0.42, 0.30),   # brown
+	Color(0.97, 0.96, 0.95),   # white
+	Color(0.34, 0.32, 0.38),   # charcoal
+]
+const CAT_EYES : Array = [
+	Color(0.45, 0.88, 0.50),   # green
+	Color(0.40, 0.72, 1.00),   # blue
+	Color(1.00, 0.76, 0.28),   # amber
+	Color(0.82, 0.95, 0.38),   # yellow-green
+]
+
 static func _cat(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var fur := col.lerp(Color(1.0, 0.86, 0.66), 0.45)   # soft pastel fur
-	var dark := fur.darkened(0.45)
+	var sv := absi(seed_v)
+	# Each cat: a coat colour (subtly tinted by the piece colour), a marking
+	# pattern and an eye colour — all from the per-block seed for real variety
+	var coat : Color = CAT_COATS[sv % CAT_COATS.size()]
+	var fur := coat.lerp(col, 0.16)
+	var dark := fur.darkened(0.45) if fur.v > 0.4 else fur.lightened(0.30)
+	var pattern := (sv / CAT_COATS.size()) % 4
+	var eye_col : Color = CAT_EYES[(sv / 24) % CAT_EYES.size()]
 	var t := Time.get_ticks_msec() * 0.001
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.28))
 	var c := r.get_center()
@@ -910,6 +931,28 @@ static func _cat(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, see
 	# Head
 	rr_grad(ci, r, rad, fur.lightened(0.18), fur.darkened(0.12))
 	rr_outline(ci, r, rad, dark, 1.5)
+	# Markings (drawn under the eyes) — gives each cat a distinct coat pattern
+	match pattern:
+		1:  # tabby — forehead stripes + cheek dashes
+			var mc := fur.darkened(0.26) if fur.v > 0.4 else fur.lightened(0.22)
+			for k : int in [-1, 0, 1]:
+				var mx := c.x + float(k) * s * 0.085
+				ci.draw_line(Vector2(mx, r.position.y + s * 0.30),
+					Vector2(mx + float(k) * s * 0.03, r.position.y + s * 0.17), mc, 2.2)
+			for sgn3 : float in [-1.0, 1.0]:
+				ci.draw_line(Vector2(c.x + sgn3 * s * 0.33, c.y + s * 0.04),
+					Vector2(c.x + sgn3 * s * 0.44, c.y + s * 0.09), mc, 2.0)
+		2:  # patch over one eye
+			var side := 1.0 if (sv % 2 == 0) else -1.0
+			ci.draw_circle(Vector2(c.x + side * s * 0.20, c.y - s * 0.02), s * 0.21,
+				fur.darkened(0.30) if fur.v > 0.4 else fur.lightened(0.26))
+		3:  # white blaze down the face + light muzzle
+			var blaze := Color(1, 1, 1, 0.55)
+			ci.draw_polygon(PackedVector2Array([
+				Vector2(c.x - s * 0.07, r.position.y + s * 0.16),
+				Vector2(c.x + s * 0.07, r.position.y + s * 0.16),
+				Vector2(c.x, c.y + s * 0.16)]), PackedColorArray([blaze]))
+			ci.draw_circle(Vector2(c.x, c.y + s * 0.26), s * 0.15, blaze)
 	# Eyes — big anime eyes that blink (~every few seconds, seeded phase)
 	var blink := fmod(t * 0.6 + float(seed_v % 11) * 0.5, 1.0)
 	var open := blink > 0.06
@@ -920,9 +963,9 @@ static func _cat(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, see
 			ci.draw_circle(Vector2(ex2, eye_y), s * 0.115, Color(0.10, 0.09, 0.14))   # eye
 			ci.draw_circle(Vector2(ex2, eye_y), s * 0.115, dark)
 			ci.draw_circle(Vector2(ex2, eye_y + s * 0.01), s * 0.085, Color(0.12, 0.10, 0.16))
-			# Iris glow + sparkle
+			# Iris glow + sparkle (seeded eye colour)
 			ci.draw_circle(Vector2(ex2, eye_y + s * 0.015), s * 0.05,
-				Color(col.lightened(0.35).r, col.lightened(0.35).g, col.lightened(0.35).b, 0.9))
+				Color(eye_col.r, eye_col.g, eye_col.b, 0.9))
 			ci.draw_circle(Vector2(ex2 - s * 0.03, eye_y - s * 0.03), s * 0.028, Color(1, 1, 1, 0.95))
 			ci.draw_circle(Vector2(ex2 + s * 0.025, eye_y + s * 0.03), s * 0.014, Color(1, 1, 1, 0.6))
 		else:

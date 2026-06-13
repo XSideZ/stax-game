@@ -22,7 +22,8 @@ var _snd_over     : AudioStreamWAV
 var _snd_theme    : AudioStreamWAV
 var _snd_board    : AudioStreamWAV
 var _snd_best     : AudioStreamWAV
-var _snd_meow     : AudioStreamWAV
+var _snd_kchirp   : AudioStreamWAV   # cat mode: short kitten "mrp" on placement
+var _snd_kmeows   : Array = []       # cat mode: cute kitten meows (clears / unlock)
 var _snd_clears   : Array = []   # indexed by lines cleared (1..5)
 
 func _ready() -> void:
@@ -55,7 +56,10 @@ func _exit_tree() -> void:
 		_music_thread.wait_to_finish()
 
 # ── Public API ────────────────────────────────────────────────────────────────
-func play_place() -> void:   _play(_snd_place)
+# In cat mode, placement + clears speak in little kitten meows
+func play_place() -> void:
+	if GameState.cat_mode: _play(_snd_kchirp)
+	else: _play(_snd_place)
 func play_pickup() -> void:  _play(_snd_pickup)
 func play_invalid() -> void: _play(_snd_invalid)
 func play_click() -> void:   _play(_snd_click)
@@ -64,12 +68,15 @@ func play_game_over() -> void: _play(_snd_over)
 func play_theme() -> void:   _play(_snd_theme)
 func play_board_clear() -> void: _play(_snd_board)
 func play_best() -> void:    _play(_snd_best)
-func play_meow() -> void:    _play(_snd_meow)
+func play_meow() -> void:    _play(_snd_kmeows[randi() % _snd_kmeows.size()])
 
 func play_clear(lines: int) -> void:
 	if lines <= 0:
 		return
-	_play(_snd_clears[clampi(lines, 1, 5) - 1])
+	if GameState.cat_mode:
+		_play(_snd_kmeows[randi() % _snd_kmeows.size()])
+	else:
+		_play(_snd_clears[clampi(lines, 1, 5) - 1])
 
 func play_combo(n: int) -> void:
 	if n >= 2:
@@ -146,11 +153,18 @@ func _build_sounds() -> void:
 		nb.append_array(_tone(f, f * 1.01, 0.09, 0.40))
 	_snd_best = _make_stream(nb)
 
-	# Meow — a rising "me" gliding into a falling "ow"
-	var mw := PackedByteArray()
-	mw.append_array(_tone(480.0, 760.0, 0.16, 0.42, 0.85))
-	mw.append_array(_tone(760.0, 360.0, 0.26, 0.42, 0.85))
-	_snd_meow = _make_stream(mw)
+	# Kitten "mrp" chirp — very short, high, for placing a piece in cat mode
+	var kc := PackedByteArray()
+	kc.append_array(_tone(900.0, 1280.0, 0.07, 0.30, 0.85))
+	_snd_kchirp = _make_stream(kc)
+
+	# Kitten meows — high, cute rise-then-fall warbles (clears + the unlock)
+	_snd_kmeows = []
+	for base in [820.0, 940.0, 1060.0]:
+		var km := PackedByteArray()
+		km.append_array(_tone(base, base * 1.55, 0.10, 0.40, 0.85))
+		km.append_array(_tone(base * 1.55, base * 0.80, 0.18, 0.40, 0.85))
+		_snd_kmeows.append(_make_stream(km))
 
 # ── Music — chill lofi loop (~29s) ────────────────────────────────────────────
 # Am7 → Fmaj7 → Cmaj7 → G, twice through with two arpeggio patterns.
