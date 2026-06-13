@@ -15,6 +15,24 @@ var revive_used : bool = false
 # Dev skin changer (main-menu picker, session-only): -1 = follow the theme
 var dev_skin_override : int = -1
 
+# ── Secret cat skin (easter egg: tap S-T-A-X on the title in order) ───────────
+# CAT is the last THEMES entry; the random theme rotation only uses 0..CAT_SKIN-1
+# so it never appears by chance. cat_mode forces it on everywhere, and persists.
+const CAT_SKIN := 20
+var cat_mode : bool = false
+
+# Effective skin index, honoured by Game/MainMenu/GameOver
+func active_skin(theme_i: int) -> int:
+	if cat_mode:
+		return CAT_SKIN
+	if dev_skin_override >= 0:
+		return dev_skin_override
+	return theme_i % THEMES.size()
+
+func set_cat_mode(on: bool) -> void:
+	cat_mode = on
+	_save()
+
 # ── Player profile / XP ───────────────────────────────────────────────────────
 # Level curve: cost(level→level+1) = 20 + 0.28·level². Total to hit MAX_LEVEL
 # is ~92k XP; an average run (≈40 moves, ≈800 pts) pays ~80 XP, so level 100
@@ -218,6 +236,8 @@ const THEMES: Array = [
 	{"bg": Color(0.19, 0.14, 0.06), "orb": Color(1.00, 0.85, 0.40, 0.07), "accent": Color(1.00, 0.85, 0.45), "name": "THE VAULT"},
 	{"bg": Color(0.10, 0.18, 0.08), "orb": Color(0.50, 0.90, 0.30, 0.08), "accent": Color(0.62, 1.00, 0.42), "name": "SWAMP"},
 	{"bg": Color(0.11, 0.05, 0.15), "orb": Color(0.90, 0.40, 1.00, 0.08), "accent": Color(1.00, 0.50, 0.90), "name": "DANCE FLOOR"},
+	# index 20 = secret CAT skin (never in random rotation; easter-egg only)
+	{"bg": Color(0.20, 0.14, 0.24), "orb": Color(1.00, 0.80, 0.90, 0.09), "accent": Color(1.00, 0.78, 0.88), "name": "MEOW TOWN"},
 ]
 
 func _ready() -> void:
@@ -352,6 +372,7 @@ func _save() -> void:
 	f.store_var(stat_board_clears)
 	f.store_var(stat_best_multi)
 	f.store_var(stat_revives)
+	f.store_var(cat_mode)
 	f.close()
 
 func _load() -> void:
@@ -395,4 +416,6 @@ func _load() -> void:
 		stat_best_multi = f.get_var()
 	if f.get_position() < f.get_length():
 		stat_revives = f.get_var()
+	if f.get_position() < f.get_length():
+		cat_mode = f.get_var()
 	f.close()

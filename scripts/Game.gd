@@ -157,8 +157,13 @@ var tray_pop_t : float = 0.0
 var drag_layer : Node2D
 
 func _ready() -> void:
-	# Theme progression carries over between runs
-	theme_idx = GameState.theme_idx % THEMES.size()
+	# AUTO theme: a continued run keeps its theme; a fresh run starts on a
+	# RANDOM theme so the default skin set never feels predictable
+	if GameState.has_save:
+		theme_idx = GameState.theme_idx % THEMES.size()
+	else:
+		theme_idx = randi() % GameState.CAT_SKIN   # 0..19, never the secret cat
+		GameState.set_theme(theme_idx)
 	curr_bg   = THEMES[_visual_idx()]["bg"]
 	prev_bg   = curr_bg
 	_init_orbs()
@@ -664,6 +669,8 @@ func _show_achievement_toast(id: String) -> void:
 # Dev skin override (main-menu picker) wins over the theme — and drives the
 # WHOLE visual set (blocks, background colour, pattern, orbs), not just blocks
 func _visual_idx() -> int:
+	if GameState.cat_mode:
+		return GameState.CAT_SKIN
 	if GameState.dev_skin_override >= 0:
 		return GameState.dev_skin_override
 	return theme_idx
@@ -711,7 +718,11 @@ func _pos_to_slot(pos: Vector2) -> int:
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 func _advance_theme() -> void:
-	theme_idx  = (theme_idx + 1) % THEMES.size()
+	# Random next theme (never repeats current, never the secret cat) — AUTO stays fresh
+	var nxt := theme_idx
+	while nxt == theme_idx:
+		nxt = randi() % GameState.CAT_SKIN   # 0..19
+	theme_idx  = nxt
 	GameState.set_theme(theme_idx)
 	# Skin override active: progression still ticks, but visuals stay locked
 	if GameState.dev_skin_override >= 0:
@@ -1138,6 +1149,39 @@ func _draw_bg_pattern() -> void:
 				var hue3 := fmod(float(i) * 0.30 + dt2 * 0.08, 1.0)
 				draw_polygon(PackedVector2Array([origin, tip2 + Vector2(-40, 0), tip2 + Vector2(40, 0)]),
 					PackedColorArray([Color.from_hsv(hue3, 0.5, 1.0, 0.05)]))
+		20:  # Meow Town — drifting paw prints, floating yarn + fish
+			var mt3 := Time.get_ticks_msec() * 0.001
+			var paw := Color(1.0, 0.80, 0.88, 0.07)
+			for i in 9:
+				var pxp : float = fmod(float(i * 131 + 37) * 29.7, 414.0)
+				var pyp : float = fmod(float(i * 89 + 17) * 47.3 - mt3 * (7.0 + float(i % 4) * 3.0), 940.0) - 22.0
+				if pyp < -22.0: pyp += 940.0
+				# paw: main pad + 4 toe beans
+				draw_circle(Vector2(pxp, pyp), 7.0, paw)
+				for j in 4:
+					var a := -PI * 0.5 + (float(j) - 1.5) * 0.5
+					draw_circle(Vector2(pxp, pyp) + Vector2(cos(a), sin(a)) * 11.0, 3.2, paw)
+			# A couple of yarn balls slowly spinning
+			for i in 2:
+				var yx := 90.0 + float(i) * 230.0
+				var yy := 230.0 + float(i) * 360.0 + sin(mt3 * 0.5 + float(i)) * 30.0
+				draw_circle(Vector2(yx, yy), 24.0, Color(1.0, 0.70, 0.80, 0.06))
+				for k in 4:
+					var ra := mt3 * 0.4 + float(k) * 0.8 + float(i)
+					draw_arc(Vector2(yx, yy), 24.0 - float(k) * 5.0, ra, ra + PI * 1.4, 20,
+						Color(1.0, 0.78, 0.86, 0.07), 1.5, false)
+			# Little fish swimming across
+			for i in 3:
+				var flip := 1.0 if i % 2 == 0 else -1.0
+				var fxp : float = fmod(mt3 * (22.0 + float(i) * 8.0) + float(i * 157), 514.0) - 50.0
+				if flip < 0.0: fxp = 414.0 - fxp
+				var fyp : float = 140.0 + float(i) * 250.0 + sin(mt3 * 1.4 + float(i)) * 14.0
+				var fc := Color(1.0, 0.85, 0.90, 0.07)
+				draw_set_transform(Vector2(fxp, fyp), 0.0, Vector2(flip, 1.0))
+				draw_circle(Vector2.ZERO, 8.0, fc)
+				draw_polygon(PackedVector2Array([Vector2(-7, 0), Vector2(-15, -6), Vector2(-15, 6)]),
+					PackedColorArray([fc]))
+				draw_set_transform(Vector2.ZERO)
 
 func _draw_slot(i: int) -> void:
 	var sx   : float = i * SLOT_W

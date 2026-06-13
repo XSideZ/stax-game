@@ -22,6 +22,7 @@ var _snd_over     : AudioStreamWAV
 var _snd_theme    : AudioStreamWAV
 var _snd_board    : AudioStreamWAV
 var _snd_best     : AudioStreamWAV
+var _snd_meow     : AudioStreamWAV
 var _snd_clears   : Array = []   # indexed by lines cleared (1..5)
 
 func _ready() -> void:
@@ -63,6 +64,7 @@ func play_game_over() -> void: _play(_snd_over)
 func play_theme() -> void:   _play(_snd_theme)
 func play_board_clear() -> void: _play(_snd_board)
 func play_best() -> void:    _play(_snd_best)
+func play_meow() -> void:    _play(_snd_meow)
 
 func play_clear(lines: int) -> void:
 	if lines <= 0:
@@ -143,6 +145,12 @@ func _build_sounds() -> void:
 	for f in [659.25, 830.61, 1046.5, 1318.5, 1661.2]:
 		nb.append_array(_tone(f, f * 1.01, 0.09, 0.40))
 	_snd_best = _make_stream(nb)
+
+	# Meow — a rising "me" gliding into a falling "ow"
+	var mw := PackedByteArray()
+	mw.append_array(_tone(480.0, 760.0, 0.16, 0.42, 0.85))
+	mw.append_array(_tone(760.0, 360.0, 0.26, 0.42, 0.85))
+	_snd_meow = _make_stream(mw)
 
 # ── Music — chill lofi loop (~29s) ────────────────────────────────────────────
 # Am7 → Fmaj7 → Cmaj7 → G, twice through with two arpeggio patterns.

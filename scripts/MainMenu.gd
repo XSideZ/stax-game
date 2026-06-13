@@ -27,6 +27,7 @@ var time_t  : float = 0.0
 
 var letters      : Array = []   # {lbl, base_pos, phase}
 var bobbing      : bool  = false
+var cat_progress : int   = 0    # secret: tap S-T-A-X in order to toggle cat mode
 var settings_box : PanelContainer
 var play_pulse   : Tween
 var faller_layer : Node2D
@@ -83,6 +84,8 @@ func _make_faller(anywhere: bool) -> Dictionary:
 
 # Current skin for menu decoration: dev override wins, else the theme's skin
 func _menu_skin() -> int:
+	if GameState.cat_mode:
+		return GameState.CAT_SKIN
 	if GameState.dev_skin_override >= 0:
 		return GameState.dev_skin_override
 	return GameState.theme_idx % GameState.THEMES.size()
@@ -129,6 +132,17 @@ func _draw() -> void:
 	for orb in orbs:
 		draw_circle(orb["pos"], orb["radius"],
 			Color(oc.r, oc.g, oc.b, orb["color"].a))
+	# Cat mode: paw prints drifting up the menu
+	if GameState.cat_mode:
+		var paw := Color(1.0, 0.80, 0.88, 0.08)
+		for i in 8:
+			var pxp : float = fmod(float(i * 131 + 37) * 29.7, 414.0)
+			var pyp : float = fmod(float(i * 89 + 17) * 47.3 - time_t * (8.0 + float(i % 3) * 4.0), 940.0) - 22.0
+			if pyp < -22.0: pyp += 940.0
+			draw_circle(Vector2(pxp, pyp), 8.0, paw)
+			for j in 4:
+				var a := -PI * 0.5 + (float(j) - 1.5) * 0.5
+				draw_circle(Vector2(pxp, pyp) + Vector2(cos(a), sin(a)) * 12.0, 3.5, paw)
 
 # ── Logo ──────────────────────────────────────────────────────────────────────
 func _build_logo() -> void:
@@ -145,10 +159,15 @@ func _build_logo() -> void:
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.size = Vector2(lw, 120)
 		lbl.pivot_offset = Vector2(lw * 0.5, 60)
+		lbl.mouse_filter = Control.MOUSE_FILTER_STOP   # secret: each letter is tappable
 		var base := Vector2(start_x + i * lw, 130.0)
 		lbl.position = base - Vector2(0, 320)   # start off-screen above
 		ui.add_child(lbl)
 		letters.append({"lbl": lbl, "base_pos": base, "phase": float(i) * 0.8})
+		var li := i
+		lbl.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+				_on_letter_tapped(li))
 
 		# Drop in with overshoot, staggered
 		var t := create_tween()
@@ -171,6 +190,57 @@ func _build_logo() -> void:
 	tt.tween_property(tagline, "modulate:a", 1.0, 0.6)
 
 	# Best score lives in the profile card now (folded out of the waterfall)
+
+# ── Secret cat easter egg: tap the letters S-T-A-X in order ──────────────────
+func _on_letter_tapped(idx: int) -> void:
+	# Tapped letter does a happy hop
+	var lbl : Label = letters[idx]["lbl"]
+	var hop := create_tween()
+	hop.tween_property(lbl, "scale", Vector2(1.3, 1.3), 0.10).set_trans(Tween.TRANS_BACK)
+	hop.tween_property(lbl, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_BACK)
+	if idx == cat_progress:
+		cat_progress += 1
+		Sfx.play_tick()
+		if cat_progress >= letters.size():
+			cat_progress = 0
+			_toggle_cat_mode()
+	else:
+		# Wrong order — start over (but a first-letter tap still counts)
+		cat_progress = 1 if idx == 0 else 0
+
+func _toggle_cat_mode() -> void:
+	# The bg, orbs and falling pieces all read the skin live each frame, so the
+	# whole menu recolours to (or from) the cat theme instantly — no rebuild.
+	GameState.set_cat_mode(not GameState.cat_mode)
+	Sfx.play_meow()
+	_show_meow_popup()
+	# Letters do a happy scale-pop to celebrate (rotation is owned by the bob)
+	for i in letters.size():
+		var l : Label = letters[i]["lbl"]
+		var t := create_tween()
+		t.tween_interval(float(i) * 0.06)
+		t.tween_property(l, "scale", Vector2(1.4, 1.4), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(l, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK)
+
+func _show_meow_popup() -> void:
+	var lbl := Label.new()
+	lbl.text = "MEOW!" if GameState.cat_mode else "BYE KITTY"
+	lbl.add_theme_font_size_override("font_size", 64)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.78, 0.88))
+	lbl.add_theme_color_override("font_outline_color", Color(0.2, 0.1, 0.18))
+	lbl.add_theme_constant_override("outline_size", 10)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.size = Vector2(414, 90)
+	lbl.position = Vector2(0, 400)
+	lbl.pivot_offset = Vector2(207, 45)
+	lbl.scale = Vector2(0.2, 0.2)
+	ui.add_child(lbl)
+	var t := create_tween()
+	t.tween_property(lbl, "scale", Vector2(1.15, 1.15), 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_property(lbl, "scale", Vector2.ONE, 0.12)
+	t.tween_interval(0.7)
+	t.tween_property(lbl, "modulate:a", 0.0, 0.4)
+	t.tween_callback(lbl.queue_free)
 
 # ── Player profile card: name + level chip + XP bar + best, tap for stats ───
 var profile_name : Label

@@ -11,7 +11,15 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19]
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+# 4x4 ordered-dither (Bayer) matrix — the classic limited-palette gradient trick
+const BAYER4 : Array = [
+	[0, 8, 2, 10],
+	[12, 4, 14, 6],
+	[3, 11, 1, 9],
+	[15, 7, 13, 5],
+]
 
 # Styles whose effects hang BELOW the block (drips) — on the grid these must
 # be painted in a second pass after all cells, or the row below covers them
@@ -112,6 +120,7 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		17: _gold(ci, r, col, s, rad, seed_v, pr)
 		18: _slime(ci, r, col, s, rad, seed_v)
 		19: _disco(ci, r, col, s, rad, seed_v)
+		20: _cat(ci, r, col, s, rad, seed_v)
 	if with_overlay and OVERLAY_STYLES.has(style):
 		paint_overlay(ci, style, r, col, seed_v)
 
@@ -343,16 +352,36 @@ static func _crystal(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 		Color(1, 1, 1, 0.75), 2.0)
 	ci.draw_circle(c + Vector2(s * 0.12, s * 0.10), s * 0.030, Color(1, 1, 1, 0.65))
 
-# ── 5 CANDY ───────────────────────────────────────────────────────────────────
+# ── 5 CANDY (candy cane: diagonal stripes in the piece colour over white) ────
 static func _candy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int = 0) -> void:
 	var crad := rad + s * 0.07
+	var stripe := col.lerp(Color(0.95, 0.15, 0.20), 0.35)   # nudge toward candy red
+	var white := Color(1.0, 0.97, 0.95)
 	rr_fill(ci, Rect2(r.position + Vector2(0, s * 0.07), r.size), crad, Color(0, 0, 0, 0.30))
-	rr_grad(ci, r, crad, col.lightened(0.45), col.darkened(0.12))
-	rr_outline(ci, r, crad, col.darkened(0.38), 2.0)
-	var gloss := Rect2(r.position + Vector2(r.size.x * 0.12, r.size.y * 0.10),
-		Vector2(r.size.x * 0.58, r.size.y * 0.26))
-	rr_fill(ci, gloss, gloss.size.y * 0.5, Color(1, 1, 1, 0.50))
-	ci.draw_circle(r.position + r.size * Vector2(0.78, 0.74), s * 0.05, Color(1, 1, 1, 0.35))
+	# White peppermint base
+	rr_grad(ci, r, crad, white, Color(0.90, 0.86, 0.87))
+	# Diagonal coloured stripes, anchored to the block corner so every candy
+	# looks identical; clipped just inside the rounded edge
+	var inner := r.grow(-s * 0.05)
+	var sw := s * 0.24
+	var y0 := r.position.y - s * 0.1
+	var y1 := r.end.y + s * 0.1
+	var base := r.position.x + r.position.y
+	var lo := -sw
+	while lo < r.size.x + r.size.y + sw:
+		var d := base + lo
+		var poly := clip_poly_to_rect(PackedVector2Array([
+			Vector2(d - y0, y0), Vector2(d + sw - y0, y0),
+			Vector2(d + sw - y1, y1), Vector2(d - y1, y1)]), inner)
+		if poly.size() >= 3:
+			ci.draw_polygon(poly, PackedColorArray([stripe]))
+		lo += sw * 2.0
+	# Glossy shine across the top + a little sparkle
+	var gloss := Rect2(r.position + Vector2(r.size.x * 0.12, r.size.y * 0.09),
+		Vector2(r.size.x * 0.60, r.size.y * 0.18))
+	rr_fill(ci, gloss, gloss.size.y * 0.5, Color(1, 1, 1, 0.45))
+	ci.draw_circle(r.position + r.size * Vector2(0.78, 0.74), s * 0.045, Color(1, 1, 1, 0.40))
+	rr_outline(ci, r, crad, stripe.darkened(0.35), 2.0)
 
 # ── 6 FROST ───────────────────────────────────────────────────────────────────
 static func _frost(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
@@ -596,42 +625,47 @@ static func paint_overlay(ci: CanvasItem, style: int, r: Rect2, col: Color, seed
 				ci.draw_line(Vector2(dx2, r.end.y - s * 0.02), Vector2(dx2, r.end.y + stretch2), gl.darkened(0.05), s * 0.055 * (0.55 + 0.45 * k2))
 				ci.draw_circle(Vector2(dx2, r.end.y + stretch2), s * 0.045 * (0.55 + 0.45 * k2), gl.lightened(0.10))
 
-# ── 13 RETRO (8-bit sprite block: dark tile + chunky pixel-art sprite) ────────
+# ── 13 RETRO (chunky low-res pixel block, ordered-dither gradient) ────────────
+# The whole block is an 8x8 grid of fat pixels: dark sprite outline, a
+# dithered diagonal light gradient through a 4-shade palette (the classic
+# limited-colour look), bright bevel pixels top-left + a wandering twinkle.
 static func _retro(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, seed_v: int) -> void:
 	var px := s / 8.0
-	# Hard shadow + dark bevel tile (the sprite is the hero)
+	var t := Time.get_ticks_msec() * 0.001
+	# Hard drop shadow (no soft edges in 8-bit land)
 	ci.draw_rect(Rect2(r.position + Vector2(px * 0.7, px * 0.7), r.size), Color(0, 0, 0, 0.35), true)
-	ci.draw_rect(r, col.darkened(0.45), true)
-	ci.draw_rect(Rect2(r.position, Vector2(r.size.x, px)), col.darkened(0.25), true)
-	ci.draw_rect(Rect2(r.position, Vector2(px, r.size.y)), col.darkened(0.25), true)
-	ci.draw_rect(Rect2(r.position + Vector2(0, r.size.y - px), Vector2(r.size.x, px)), col.darkened(0.62), true)
-	ci.draw_rect(Rect2(r.position + Vector2(r.size.x - px, 0), Vector2(px, r.size.y)), col.darkened(0.62), true)
-	ci.draw_rect(r, Color(0.05, 0.05, 0.08, 0.9), false, 1.0)
-	# Sprite: seeded pick, centred, with black outline + auto 8-bit shading
-	var sprite : Array = RETRO_SPRITES[absi(seed_v) % RETRO_SPRITES.size()]
-	var sp := s * 0.085
-	var origin := r.get_center() - Vector2(4.0 * sp, 4.0 * sp)
-	var outline := Color(0.05, 0.05, 0.08)
-	for y in 8:
-		var row : String = sprite[y]
-		for x in 8:
-			if row[x] != "X":
-				# Outline: empty pixel touching a filled neighbour
-				var near := false
-				if x > 0 and row[x - 1] == "X": near = true
-				elif x < 7 and row[x + 1] == "X": near = true
-				elif y > 0 and sprite[y - 1][x] == "X": near = true
-				elif y < 7 and sprite[y + 1][x] == "X": near = true
-				if near:
-					ci.draw_rect(Rect2(origin + Vector2(float(x) * sp, float(y) * sp), Vector2(sp, sp)), outline, true)
+	var outline := col.darkened(0.62)
+	var pal := [col.darkened(0.40), col.darkened(0.18), col, col.lightened(0.40)]
+	for gy in 8:
+		for gx in 8:
+			var cell := Rect2(r.position + Vector2(float(gx) * px, float(gy) * px), Vector2(px + 0.6, px + 0.6))
+			# Outer ring = crisp dark pixel outline
+			if gx == 0 or gy == 0 or gx == 7 or gy == 7:
+				ci.draw_rect(cell, outline, true)
 				continue
-			# Auto shading: lit if open above, shaded if open below
-			var c := col
-			if y == 0 or sprite[y - 1][x] != "X":
-				c = col.lightened(0.50)
-			elif y == 7 or sprite[y + 1][x] != "X":
-				c = col.darkened(0.30)
-			ci.draw_rect(Rect2(origin + Vector2(float(x) * sp, float(y) * sp), Vector2(sp, sp)), c, true)
+			# Brightness: diagonal light (top-left bright) + a soft highlight bump
+			var fx := float(gx) / 7.0
+			var fy := float(gy) / 7.0
+			var v := 1.0 - (fx + fy) * 0.42
+			v += 0.28 * (1.0 - clampf(Vector2(fx - 0.30, fy - 0.28).length() * 2.3, 0.0, 1.0))
+			v = clampf(v, 0.0, 1.0)
+			# Quantise into the 4-shade palette with ordered dithering
+			var scaled := v * 3.0
+			var bi := int(floor(scaled))
+			var frac := scaled - float(bi)
+			var thr := float(BAYER4[gy % 4][gx % 4]) / 16.0
+			var idx := clampi(bi + (1 if frac > thr else 0), 0, 3)
+			ci.draw_rect(cell, pal[idx], true)
+	# Bright bevel highlight pixels, top-left interior
+	ci.draw_rect(Rect2(r.position + Vector2(px * 1.0, px * 1.0), Vector2(px * 2.0 + 0.6, px + 0.6)), col.lightened(0.62), true)
+	ci.draw_rect(Rect2(r.position + Vector2(px * 1.0, px * 2.0), Vector2(px + 0.6, px + 0.6)), col.lightened(0.62), true)
+	# A single twinkle pixel that blinks on the block's own phase
+	var bl := sin(t * 4.0 + float(seed_v) * 1.7)
+	if bl > 0.4:
+		var sxp := 3 + (seed_v % 3)
+		var syp := 3 + ((seed_v / 3) % 2)
+		ci.draw_rect(Rect2(r.position + Vector2(float(sxp) * px, float(syp) * px), Vector2(px + 0.6, px + 0.6)),
+			Color(1, 1, 1, (bl - 0.4) / 0.6 * 0.9), true)
 
 # ── 14 BUBBLE (animated: iridescent soap film) ────────────────────────────────
 static func _bubble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
@@ -854,6 +888,61 @@ static func _disco(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 				Vector2(fs - s * 0.02, fs - s * 0.02))
 			ci.draw_rect(facet, Color.from_hsv(hue, 0.45, bright), true)
 	rr_outline(ci, r, rad, col.lightened(0.40), 1.5)
+
+# ── 20 CAT (secret: cartoony/anime kitty face, blinks + ear-twitch) ──────────
+static func _cat(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+	var fur := col.lerp(Color(1.0, 0.86, 0.66), 0.45)   # soft pastel fur
+	var dark := fur.darkened(0.45)
+	var t := Time.get_ticks_msec() * 0.001
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.28))
+	var c := r.get_center()
+	# Ears (triangles up top, with pink inner) — a gentle twitch
+	var tw := sin(t * 2.0 + float(seed_v)) * s * 0.012
+	for sgn : float in [-1.0, 1.0]:
+		var ex := c.x + sgn * s * 0.26
+		var ey := r.position.y + s * 0.16
+		ci.draw_polygon(PackedVector2Array([
+			Vector2(ex - s * 0.14, ey + s * 0.02), Vector2(ex + sgn * tw, ey - s * 0.18),
+			Vector2(ex + s * 0.14, ey + s * 0.02)]), PackedColorArray([fur.darkened(0.10)]))
+		ci.draw_polygon(PackedVector2Array([
+			Vector2(ex - s * 0.06, ey - s * 0.01), Vector2(ex + sgn * tw, ey - s * 0.12),
+			Vector2(ex + s * 0.06, ey - s * 0.01)]), PackedColorArray([Color(1.0, 0.65, 0.72)]))
+	# Head
+	rr_grad(ci, r, rad, fur.lightened(0.18), fur.darkened(0.12))
+	rr_outline(ci, r, rad, dark, 1.5)
+	# Eyes — big anime eyes that blink (~every few seconds, seeded phase)
+	var blink := fmod(t * 0.6 + float(seed_v % 11) * 0.5, 1.0)
+	var open := blink > 0.06
+	var eye_y := c.y + s * 0.02
+	for sgn2 : float in [-1.0, 1.0]:
+		var ex2 := c.x + sgn2 * s * 0.20
+		if open:
+			ci.draw_circle(Vector2(ex2, eye_y), s * 0.115, Color(0.10, 0.09, 0.14))   # eye
+			ci.draw_circle(Vector2(ex2, eye_y), s * 0.115, dark)
+			ci.draw_circle(Vector2(ex2, eye_y + s * 0.01), s * 0.085, Color(0.12, 0.10, 0.16))
+			# Iris glow + sparkle
+			ci.draw_circle(Vector2(ex2, eye_y + s * 0.015), s * 0.05,
+				Color(col.lightened(0.35).r, col.lightened(0.35).g, col.lightened(0.35).b, 0.9))
+			ci.draw_circle(Vector2(ex2 - s * 0.03, eye_y - s * 0.03), s * 0.028, Color(1, 1, 1, 0.95))
+			ci.draw_circle(Vector2(ex2 + s * 0.025, eye_y + s * 0.03), s * 0.014, Color(1, 1, 1, 0.6))
+		else:
+			# Closed: a happy upward curve  ^_^
+			ci.draw_arc(Vector2(ex2, eye_y + s * 0.04), s * 0.10, PI * 1.15, PI * 1.85, 8, dark, 2.0)
+	# Blush cheeks
+	ci.draw_circle(c + Vector2(-s * 0.30, s * 0.10), s * 0.05, Color(1.0, 0.55, 0.65, 0.5))
+	ci.draw_circle(c + Vector2(s * 0.30, s * 0.10), s * 0.05, Color(1.0, 0.55, 0.65, 0.5))
+	# Nose (:3 mouth)
+	var nx := c.x
+	var ny := c.y + s * 0.18
+	ci.draw_polygon(PackedVector2Array([
+		Vector2(nx - s * 0.035, ny), Vector2(nx + s * 0.035, ny), Vector2(nx, ny + s * 0.03)]),
+		PackedColorArray([Color(1.0, 0.55, 0.62)]))
+	ci.draw_arc(Vector2(nx - s * 0.05, ny + s * 0.04), s * 0.05, 0, PI, 6, dark, 1.3)
+	ci.draw_arc(Vector2(nx + s * 0.05, ny + s * 0.04), s * 0.05, 0, PI, 6, dark, 1.3)
+	# Whiskers
+	for wy in [ny - s * 0.02, ny + s * 0.05]:
+		ci.draw_line(Vector2(c.x - s * 0.20, wy), Vector2(c.x - s * 0.42, wy - s * 0.03), dark, 1.2)
+		ci.draw_line(Vector2(c.x + s * 0.20, wy), Vector2(c.x + s * 0.42, wy - s * 0.03), dark, 1.2)
 
 # ── 11 GALAXY (animated) ──────────────────────────────────────────────────────
 static func _galaxy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
