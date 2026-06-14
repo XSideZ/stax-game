@@ -127,9 +127,9 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		24: _hologram(ci, r, col, s, rad, seed_v)
 		25: _prism(ci, r, col, s, rad, seed_v, pr)
 		26: _stained(ci, r, col, s, rad, seed_v)
-		27: _synthwave(ci, r, col, s, rad, seed_v, pr)
+		27: _synthwave(ci, r, col, s, rad, seed_v)
 		28: _autumn(ci, r, col, s, rad, seed_v, pr)
-		29: _warp(ci, r, col, s, rad, seed_v, pr)
+		29: _warp(ci, r, col, s, rad, seed_v)
 		30: _cat(ci, r, col, s, rad, seed_v)
 	if with_overlay and OVERLAY_STYLES.has(style):
 		paint_overlay(ci, style, r, col, seed_v)
@@ -1378,35 +1378,37 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 	ci.draw_circle(Vector2(bx, r.position.y + r.size.y * 0.42), s * 0.26, Color(1.0, 0.97, 0.85, 0.10))
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
-# ── 27 SYNTHWAVE (animated: 80s sunset gradient + continuous neon grid + scan) ─
-static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
+# ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
+# Sunset gradient, a glowing horizon, CRT scanlines + a sweep that ride INSIDE
+# the block, and a magenta/cyan neon double-edge. Everything stays in bounds.
+static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
 	var t := Time.get_ticks_msec() * 0.001
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	var top := col.lerp(Color(1.0, 0.16, 0.60), 0.62)   # hot magenta
-	var bot := col.lerp(Color(0.18, 0.62, 1.0), 0.55)   # cyan
+	var top := col.lerp(Color(1.0, 0.18, 0.62), 0.60)   # hot magenta
+	var bot := col.lerp(Color(0.22, 0.55, 1.0), 0.55)   # cyan
 	rr_grad(ci, r, rad, top, bot)
-	var delta := r.position - pr.position
-	if delta.length() < s * 0.5:
-		delta = Vector2.ZERO
-	var pulse := 0.7 + 0.3 * sin(t * 2.0)
-	var grid_col := Color(0.45, 1.0, 0.95, 0.22 + 0.12 * pulse)
-	var gs := ps * 0.5
-	for vi in range(int(floor(pr.position.x / gs)), int(ceil(pr.end.x / gs)) + 1):
-		var x := float(vi) * gs + delta.x
-		ci.draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), grid_col, 1.2)
-	for hi in range(int(floor(pr.position.y / gs)), int(ceil(pr.end.y / gs)) + 1):
-		var y := float(hi) * gs + delta.y
-		ci.draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), grid_col, 1.2)
-	# Bright scan sweep travelling down the whole board (continuous)
-	var period := ps * 9.0
-	var ys := fmod(t * ps * 1.2, period)
-	var ky := int(floor((pr.position.y - ys) / period))
-	for kk in range(ky, ky + 2):
-		var yy := ys + float(kk) * period + delta.y
-		if yy >= r.position.y - 2.0 and yy <= r.end.y + 2.0:
-			ci.draw_line(Vector2(r.position.x, yy), Vector2(r.end.x, yy), Color(1.0, 0.9, 0.6, 0.6), 2.5)
-	rr_outline(ci, r, rad, Color(1.0, 0.4, 0.8, 0.6), 1.6)
+	# Glowing sunset horizon across the middle
+	var hy := r.position.y + r.size.y * 0.5
+	rr_fill(ci, Rect2(r.position.x + s * 0.06, hy - s * 0.05, r.size.x - s * 0.12, s * 0.10),
+		s * 0.04, Color(1.0, 0.82, 0.42, 0.38))
+	# CRT scanlines, brighter toward the horizon (all within the block)
+	var n := 6
+	for i in n:
+		var fy : float = float(i) / float(n - 1)
+		var ly : float = r.position.y + s * 0.12 + fy * (r.size.y - s * 0.24)
+		var a : float = 0.10 + 0.12 * (1.0 - absf(fy - 0.5) * 2.0)
+		ci.draw_line(Vector2(r.position.x + s * 0.08, ly), Vector2(r.end.x - s * 0.08, ly),
+			Color(0.6, 1.0, 0.95, a), 1.0)
+	# Bright scan sweep travelling down within the block, wrapping
+	var sweep : float = fmod(t * 0.5 + float(seed_v % 10) * 0.1, 1.0)
+	var sy : float = r.position.y + s * 0.10 + sweep * (r.size.y - s * 0.20)
+	ci.draw_line(Vector2(r.position.x + s * 0.08, sy), Vector2(r.end.x - s * 0.08, sy),
+		Color(1.0, 0.95, 0.7, 0.5 * (1.0 - sweep * 0.5)), 2.0)
+	# Chrome top catch + neon double edge (magenta outer, cyan inner)
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.08, s * 0.06), Vector2(r.size.x - s * 0.16, s * 0.06)),
+		s * 0.03, Color(1, 1, 1, 0.18))
+	rr_outline(ci, r, rad, Color(1.0, 0.4, 0.85, 0.7), 2.0)
+	rr_outline(ci, r.grow(-s * 0.045), rad * 0.8, Color(0.45, 1.0, 0.95, 0.35), 1.0)
 
 # ── 28 AUTUMN (animated: warm wood with a continuous fall of tumbling leaves) ─
 static func _autumn(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
@@ -1461,34 +1463,38 @@ static func _leaf(ci: CanvasItem, p: Vector2, ang: float, size_f: float, col: Co
 		var basep := p + Vector2((-(0.85) * sa), ((0.85) * ca)) * size_f
 		ci.draw_line(basep, tip, Color(col.darkened(0.35).r, col.darkened(0.35).g, col.darkened(0.35).b, 0.6), 1.0)
 
-# ── 29 WARP (animated: hyperspace — stars streak radially from the board centre)
-static func _warp(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
+# ── 29 WARP (animated: hyperspace — star streaks, kept inside each block) ────
+# Streaks point radially outward (from the board centre) for a tunnel feel, but
+# both ends are clamped to the block so nothing ever spills past the edges.
+static func _warp(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
 	var t := Time.get_ticks_msec() * 0.001
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
 	var deep := col.lerp(Color(0.03, 0.04, 0.13), 0.82)
 	rr_grad(ci, r, rad, deep.lightened(0.06), deep.darkened(0.12))
-	var bc := Vector2(184.0, 184.0)   # board centre (grid-local) = warp vanishing point
-	var radial := pr.get_center() - bc
+	var inner := r.grow(-s * 0.05)
+	var center := r.get_center()
+	var radial := center - Vector2(184.0, 184.0)   # board centre (grid-local)
 	var dist := radial.length()
 	var dir := radial.normalized() if dist > 1.0 else Vector2(0.0, -1.0)
 	var perp := dir.orthogonal()
-	var streak_len := ps * (0.30 + clampf(dist / (ps * 6.0), 0.0, 1.0))
-	var ctr := r.get_center()
-	var h := absi(seed_v * 2654435 + 1)
+	var reach := minf(inner.size.x, inner.size.y)
+	var span := reach * (0.55 + clampf(dist / (s * 6.0), 0.0, 1.0) * 0.4)
+	var h := absi(seed_v * 2654435 + 7)
 	for i in 5:
-		var ph : float = fmod(t * (0.45 + float(i % 3) * 0.22) + float((h >> i) % 97) * 0.06, 1.0)
-		var perp_off : float = (float((h >> (i + 5)) % 100) / 100.0 - 0.5) * ps * 0.75
-		var travel : float = (ph - 0.5) * ps * 1.0
-		var sp := ctr + dir * travel + perp * perp_off
-		var tail := sp - dir * (streak_len * (0.3 + ph * 0.7))
+		var ph : float = fmod(t * (0.5 + float(i % 3) * 0.25) + float((h >> i) % 97) * 0.05, 1.0)
+		var poff : float = (float((h >> (i + 5)) % 100) / 100.0 - 0.5) * reach * 0.7
+		var head := center + dir * (ph - 0.5) * span + perp * poff
+		var tail := head - dir * (span * (0.22 + ph * 0.5))
+		head = head.clamp(inner.position, inner.end)
+		tail = tail.clamp(inner.position, inner.end)
 		var bright := 1.0 - absf(ph - 0.55) * 1.7
 		if bright > 0.0:
-			ci.draw_line(tail, sp, Color(0.70, 0.85, 1.0, bright * 0.75), 1.0 + ph * 1.8)
-			ci.draw_circle(sp, 1.0 + ph * 1.6, Color(1, 1, 1, bright))
-	for j in 2:
-		var sx : float = r.position.x + s * (0.2 + float((absi(seed_v) * 13 + j * 41) % 60) / 100.0)
-		var sy : float = r.position.y + s * (0.2 + float((absi(seed_v) * 7 + j * 53) % 60) / 100.0)
+			ci.draw_line(tail, head, Color(0.70, 0.85, 1.0, bright * 0.8), 1.0 + ph * 1.6)
+			ci.draw_circle(head, 1.0 + ph * 1.5, Color(1, 1, 1, bright))
+	# Steady twinkle stars (inside the block)
+	for j in 3:
+		var sx : float = inner.position.x + inner.size.x * float((absi(seed_v) * 13 + j * 41) % 100) / 100.0
+		var sy : float = inner.position.y + inner.size.y * float((absi(seed_v) * 7 + j * 53) % 100) / 100.0
 		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(j + seed_v)))
 		ci.draw_circle(Vector2(sx, sy), s * 0.012, Color(1, 1, 1, 0.5 * tw))
 	rr_outline(ci, r, rad, Color(0.4, 0.5, 0.8, 0.4), 1.5)
