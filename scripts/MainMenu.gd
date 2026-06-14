@@ -1084,12 +1084,15 @@ func _build_skin_picker() -> void:
 	var grid_c := GridContainer.new()
 	grid_c.columns = 3
 	grid_c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# PASS so a touch-drag starting on the grid still reaches the ScrollContainer
+	grid_c.mouse_filter = Control.MOUSE_FILTER_PASS
 	grid_c.add_theme_constant_override("h_separation", 8)
 	grid_c.add_theme_constant_override("v_separation", 8)
 	scroll.add_child(grid_c)
 
 	var auto_btn := _make_chunky_button("AUTO", Color(0.20, 0.85, 0.45), 13)
 	auto_btn.custom_minimum_size = Vector2(96, 40)
+	auto_btn.mouse_filter = Control.MOUSE_FILTER_PASS   # let drags scroll, taps still select
 	auto_btn.pressed.connect(func():
 		GameState.dev_skin_override = -1
 		skin_label.text = _skin_current_text()
@@ -1099,6 +1102,7 @@ func _build_skin_picker() -> void:
 	for i in SKIN_NAMES.size():
 		var b := _make_chunky_button(SKIN_NAMES[i], Color(0.20, 0.75, 0.95), 13)
 		b.custom_minimum_size = Vector2(96, 40)
+		b.mouse_filter = Control.MOUSE_FILTER_PASS   # drag scrolls, tap selects
 		var idx := i
 		b.pressed.connect(func():
 			GameState.dev_skin_override = idx
