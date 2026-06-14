@@ -245,12 +245,13 @@ func _show_achievement_toast(id: String, delay: float) -> void:
 	var a : Dictionary = GameState.ach_info(id)
 	if a.is_empty():
 		return
+	var is_skin : bool = a.get("skin", false)
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.11, 0.20, 0.96)
 	sb.set_corner_radius_all(16)
 	sb.border_width_bottom = 5
-	sb.border_color = Color(0.95, 0.75, 0.15)
+	sb.border_color = Color(0.40, 0.85, 1.0) if is_skin else Color(0.95, 0.75, 0.15)
 	sb.content_margin_left = 18; sb.content_margin_right = 18
 	sb.content_margin_top = 10;  sb.content_margin_bottom = 12
 	panel.add_theme_stylebox_override("panel", sb)
@@ -261,14 +262,14 @@ func _show_achievement_toast(id: String, delay: float) -> void:
 	var vbox := VBoxContainer.new()
 	panel.add_child(vbox)
 	var header := Label.new()
-	header.text = "ACHIEVEMENT UNLOCKED"
+	header.text = "NEW SKIN UNLOCKED" if is_skin else "ACHIEVEMENT UNLOCKED"
 	header.add_theme_font_size_override("font_size", 11)
 	header.add_theme_color_override("font_color", Color(1, 1, 1, 0.50))
 	vbox.add_child(header)
 	var title := Label.new()
-	title.text = a["name"] + "   +" + str(a["xp"]) + " XP"
+	title.text = a["name"] if is_skin else a["name"] + "   +" + str(a["xp"]) + " XP"
 	title.add_theme_font_size_override("font_size", 20)
-	title.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20))
+	title.add_theme_color_override("font_color", Color(0.55, 0.90, 1.0) if is_skin else Color(0.95, 0.78, 0.20))
 	vbox.add_child(title)
 	var desc := Label.new()
 	desc.text = a["desc"]

@@ -369,7 +369,7 @@ const SMART_FADE_MOVES := 45.0
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
 const EARLY_CLEAR_SETS   := 9
-const EARLY_CLEAR_CHANCE := 0.85
+const EARLY_CLEAR_CHANCE := 0.92
 
 const BUILDER_SHAPES : Array = [
 	[[0,0],[1,0],[2,0],[3,0]],
@@ -383,6 +383,13 @@ const BUILDER_SHAPES : Array = [
 ]
 
 func _pick_shape() -> Array:
+	# EARLY GAME = a fast board-clear puzzle: ONLY small pieces, strongly biased to
+	# completing lines, so the board stays tiny and clears keep emptying it.
+	if sets_given < EARLY_CLEAR_SETS:
+		var small := _pick_combo_shape(EARLY_SHAPES)
+		if not small.is_empty():
+			return small
+		return _pick_helpful_shape()
 	var smart_p : float = clampf(0.85 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.85)
 	if randf() < smart_p:
 		var smart := _pick_combo_shape()
@@ -415,7 +422,7 @@ func _pick_shape() -> Array:
 # Uses precomputed row/col fill counts so the full shape×position sweep stays
 # cheap enough for set-spawn on mobile (can_place guarantees no overlap, so
 # fill + shape-cells-in-line == line length means the line completes).
-func _pick_combo_shape() -> Array:
+func _pick_combo_shape(pool: Array = SHAPES) -> Array:
 	var row_fill : Array = []
 	var col_fill : Array = []
 	for r in GRID_ROWS:
@@ -431,7 +438,7 @@ func _pick_combo_shape() -> Array:
 
 	var best_lines := 0
 	var candidates : Array = []
-	for s in SHAPES:
+	for s in pool:
 		var s_best := 0
 		for r in GRID_ROWS:
 			for c in GRID_COLS:
@@ -778,6 +785,10 @@ func _fire_power() -> void:
 	elif meter >= METER_BOMB:
 		meter -= METER_BOMB
 		_power_bomb()
+	# Count the ability use → can pop the Powerhouse achievement mid-run
+	GameState.add_power_used()
+	for key in GameState.check_unlocks():
+		_show_achievement_toast(key)
 	queue_redraw()
 
 # Prefer a filled cell so the blast always feels like it hit something
@@ -916,13 +927,14 @@ func _show_achievement_toast(id: String) -> void:
 	var a : Dictionary = GameState.ach_info(id)
 	if a.is_empty():
 		return
+	var is_skin : bool = a.get("skin", false)
 	Sfx.play_best()
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.11, 0.20, 0.96)
 	sb.set_corner_radius_all(16)
 	sb.border_width_bottom = 5
-	sb.border_color = Color(0.95, 0.75, 0.15)
+	sb.border_color = Color(0.40, 0.85, 1.0) if is_skin else Color(0.95, 0.75, 0.15)
 	sb.content_margin_left = 18; sb.content_margin_right = 18
 	sb.content_margin_top = 10;  sb.content_margin_bottom = 12
 	panel.add_theme_stylebox_override("panel", sb)
@@ -933,14 +945,14 @@ func _show_achievement_toast(id: String) -> void:
 	var vbox := VBoxContainer.new()
 	panel.add_child(vbox)
 	var header := Label.new()
-	header.text = "ACHIEVEMENT UNLOCKED"
+	header.text = "NEW SKIN UNLOCKED" if is_skin else "ACHIEVEMENT UNLOCKED"
 	header.add_theme_font_size_override("font_size", 11)
 	header.add_theme_color_override("font_color", Color(1, 1, 1, 0.50))
 	vbox.add_child(header)
 	var title := Label.new()
-	title.text = a["name"] + "   +" + str(a["xp"]) + " XP"
+	title.text = a["name"] if is_skin else a["name"] + "   +" + str(a["xp"]) + " XP"
 	title.add_theme_font_size_override("font_size", 20)
-	title.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20))
+	title.add_theme_color_override("font_color", Color(0.55, 0.90, 1.0) if is_skin else Color(0.95, 0.78, 0.20))
 	vbox.add_child(title)
 	var desc := Label.new()
 	desc.text = a["desc"]

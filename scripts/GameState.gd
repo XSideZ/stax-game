@@ -37,12 +37,55 @@ func set_cat_mode(on: bool) -> void:
 	cat_mode = on
 	_save()
 
-# Skins available for AUTO rotation. TODO: filter to the player's unlocked set
-# once level/achievement gating exists; for now every non-cat skin is available.
+# ── Skin unlocks (earn via levels + achievements) ─────────────────────────────
+# Rule per skin: "start" (have from the off), "L<n>" (reach level n), or
+# "<ach_group>" (complete that achievement's first tier). Index = skin/theme idx.
+const SKIN_UNLOCK : Dictionary = {
+	0:  "start",  1:  "start",  7:  "start",  8:  "start",  11: "start",
+	13: "L3",     2:  "L4",     10: "L6",     5:  "L8",     6:  "L10",
+	18: "L13",    22: "L16",    28: "L19",    27: "L22",    16: "L25",
+	23: "L28",    25: "L32",    9:  "L36",    12: "L40",
+	4:  "score",  3:  "blocks", 14: "games",  15: "streak", 17: "boards",
+	19: "multi",  20: "lines",  21: "powers", 24: "level",  26: "marathon", 29: "collector",
+}
+
+func is_skin_unlocked(idx: int) -> bool:
+	if idx >= CAT_SKIN:
+		return true
+	var rule : String = SKIN_UNLOCK.get(idx, "start")
+	if rule == "start":
+		return true
+	if rule.begins_with("L"):
+		return get_level() >= int(rule.substr(1))
+	return unlocked.get(rule + "_0", false)   # achievement first tier complete
+
+func count_unlocked_skins() -> int:
+	var n := 0
+	for i in CAT_SKIN:
+		if is_skin_unlocked(i):
+			n += 1
+	return n
+
+# Skins newly unlocked since last check — appends "skin_<idx>" toast keys to
+# pending_toasts and remembers them so each only announces once.
+func check_skin_unlocks() -> Array:
+	var fresh : Array = []
+	for i in CAT_SKIN:
+		if is_skin_unlocked(i) and not skins_seen.has(i):
+			skins_seen.append(i)
+			fresh.append("skin_%d" % i)
+	if not fresh.is_empty():
+		_save()
+	return fresh
+
+# Skins available for the AUTO rotation = the player's unlocked set
 func unlocked_skins() -> Array:
 	var pool : Array = []
 	for i in CAT_SKIN:   # 0 .. CAT_SKIN-1, never the secret cat
-		pool.append(i)
+		if is_skin_unlocked(i):
+			pool.append(i)
+	if pool.is_empty():
+		pool.append(0)
 	return pool
 
 # Next AUTO skin via a shuffle bag: returns each unlocked skin once before any
@@ -78,9 +121,15 @@ var stat_run_lines    : int = 0     # most lines cleared in a single run
 var stat_board_clears : int = 0     # lifetime full-board clears
 var stat_best_multi   : int = 0     # most lines cleared in ONE move
 var stat_revives      : int = 0     # lifetime ad-revives used
+var stat_powers_used  : int = 0     # lifetime power abilities fired
+var skins_seen        : Array = []  # skin indices already announced (for unlock toasts)
 
 func add_revive() -> void:
 	stat_revives += 1
+	_save()
+
+func add_power_used() -> void:
+	stat_powers_used += 1
 	_save()
 
 # ── Achievements (tiered, Clash-style) ────────────────────────────────────────
@@ -91,11 +140,14 @@ const ACH_GROUPS : Array = [
 	{"id": "games",  "name": "Dedicated",      "desc": "Play %s games",                  "tiers": [[1, 50], [5, 100], [10, 200]]},
 	{"id": "score",  "name": "High Scorer",    "desc": "Score %s in one run",            "tiers": [[100, 50], [1000, 150], [10000, 400]]},
 	{"id": "lines",  "name": "Line Clearer",   "desc": "Clear %s lines in total",        "tiers": [[50, 50], [500, 150], [2500, 350]]},
-	{"id": "streak", "name": "On Fire",        "desc": "Reach a streak of %s clears",    "tiers": [[3, 50], [6, 150], [10, 300]]},
+	{"id": "streak", "name": "On Fire",        "desc": "Reach a streak of %s clears",    "tiers": [[3, 50], [5, 150], [8, 300]]},
 	{"id": "multi",  "name": "Combo King",     "desc": "Clear %s lines in one move",     "tiers": [[2, 50], [3, 150], [4, 400]]},
 	{"id": "blocks", "name": "Master Builder", "desc": "Place %s blocks in total",       "tiers": [[100, 50], [1000, 150], [5000, 300]]},
 	{"id": "boards", "name": "Clean Sweep",    "desc": "Empty the whole board %s times", "tiers": [[1, 75], [5, 200], [25, 500]]},
 	{"id": "level",  "name": "Climber",        "desc": "Reach level %s",                 "tiers": [[5, 100], [15, 250], [30, 600]]},
+	{"id": "powers", "name": "Powerhouse",     "desc": "Use %s abilities",               "tiers": [[10, 100], [50, 250], [150, 500]]},
+	{"id": "marathon","name": "Marathon",      "desc": "Clear %s lines in one run",      "tiers": [[30, 100], [75, 300], [150, 600]]},
+	{"id": "collector","name": "Collector",    "desc": "Unlock %s skins",                "tiers": [[6, 100], [14, 250], [24, 600]]},
 	{"id": "revive", "name": "Second Wind",    "desc": "Continue a run with a revive",   "tiers": [[1, 100]]},
 ]
 const TIER_NUMERALS : Array = ["I", "II", "III"]
@@ -116,6 +168,9 @@ func ach_value(group_id: String) -> int:
 		"blocks": return stat_blocks
 		"boards": return stat_board_clears
 		"level":  return get_level()
+		"powers": return stat_powers_used
+		"marathon": return stat_run_lines
+		"collector": return count_unlocked_skins()
 		"revive": return stat_revives
 	return 0
 
@@ -125,8 +180,12 @@ static func ach_group(group_id: String) -> Dictionary:
 			return g
 	return {}
 
-# Display info for an unlock key like "score_1"
+# Display info for an unlock key like "score_1", or a skin unlock "skin_<idx>"
 func ach_info(key: String) -> Dictionary:
+	if key.begins_with("skin_"):
+		var si := int(key.substr(5))
+		var nm : String = THEMES[si]["name"] if si < THEMES.size() else "NEW SKIN"
+		return {"name": nm, "desc": "New skin unlocked", "xp": 0, "skin": true}
 	var sep := key.rfind("_")
 	var g := ach_group(key.substr(0, sep))
 	if g.is_empty():
@@ -142,22 +201,29 @@ func ach_info(key: String) -> Dictionary:
 	return {"name": nm, "desc": d, "xp": tier[1]}
 
 # Walk every tier of every group, unlock anything earned, grant the XP.
-# Returns the freshly unlocked keys (for toasts).
+# Loops until stable: an XP grant can raise the level (Climber) or unlock a skin
+# (Collector), which can unlock more — so one call settles the whole cascade and
+# the next call returns nothing. Returns the freshly unlocked keys (for toasts).
 func check_unlocks() -> Array:
-	var fresh : Array = []
-	for g in ACH_GROUPS:
-		var v := ach_value(g["id"])
-		for ti in g["tiers"].size():
-			var key := "%s_%d" % [g["id"], ti]
-			if unlocked.get(key, false):
-				continue
-			if v >= g["tiers"][ti][0]:
-				unlocked[key] = true
-				player_xp += g["tiers"][ti][1]
-				fresh.append(key)
-	if not fresh.is_empty():
+	var all_fresh : Array = []
+	while true:
+		var fresh : Array = []
+		for g in ACH_GROUPS:
+			var v := ach_value(g["id"])
+			for ti in g["tiers"].size():
+				var key := "%s_%d" % [g["id"], ti]
+				if unlocked.get(key, false):
+					continue
+				if v >= g["tiers"][ti][0]:
+					unlocked[key] = true
+					player_xp += g["tiers"][ti][1]
+					fresh.append(key)
+		if fresh.is_empty():
+			break
+		all_fresh.append_array(fresh)
+	if not all_fresh.is_empty():
 		_save()
-	return fresh
+	return all_fresh
 
 static func xp_cost(level: int) -> int:
 	return 20 + int(0.28 * float(level * level))
@@ -205,6 +271,7 @@ func finish_run(moves: int, final_score: int, run_lines: int = 0,
 	last_xp_gain = moves + final_score / 20
 	player_xp += last_xp_gain
 	pending_toasts = check_unlocks()
+	pending_toasts.append_array(check_skin_unlocks())
 	_save()
 
 # Theme progression persists across runs — backgrounds keep rotating
@@ -278,6 +345,7 @@ const THEMES: Array = [
 func _ready() -> void:
 	_load()
 	check_unlocks()   # silent retroactive reconcile at boot
+	check_skin_unlocks()   # mark already-earned skins as seen (no toast flood)
 
 func submit_score(s: int) -> void:
 	last_score = s
@@ -412,6 +480,8 @@ func _save() -> void:
 	f.store_var(stat_revives)
 	f.store_var(cat_mode)
 	f.store_var(theme_bag)
+	f.store_var(stat_powers_used)
+	f.store_var(skins_seen)
 	f.close()
 
 func _load() -> void:
@@ -459,4 +529,8 @@ func _load() -> void:
 		cat_mode = f.get_var()
 	if f.get_position() < f.get_length():
 		theme_bag = f.get_var()
+	if f.get_position() < f.get_length():
+		stat_powers_used = f.get_var()
+	if f.get_position() < f.get_length():
+		skins_seen = f.get_var()
 	f.close()

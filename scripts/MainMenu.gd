@@ -1100,9 +1100,12 @@ func _build_skin_picker() -> void:
 	grid_c.add_child(auto_btn)
 
 	for i in SKIN_NAMES.size():
-		var b := _make_chunky_button(SKIN_NAMES[i], Color(0.20, 0.75, 0.95), 13)
+		var col := Color(0.20, 0.75, 0.95) if GameState.is_skin_unlocked(i) else Color(0.40, 0.40, 0.48)
+		var b := _make_chunky_button(SKIN_NAMES[i], col, 13)
 		b.custom_minimum_size = Vector2(96, 40)
 		b.mouse_filter = Control.MOUSE_FILTER_PASS   # drag scrolls, tap selects
+		if not GameState.is_skin_unlocked(i):
+			b.modulate = Color(1, 1, 1, 0.55)   # locked (dev can still pick it)
 		var idx := i
 		b.pressed.connect(func():
 			GameState.dev_skin_override = idx
