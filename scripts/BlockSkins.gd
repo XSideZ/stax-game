@@ -715,51 +715,31 @@ static func paint_overlay(ci: CanvasItem, style: int, r: Rect2, col: Color, seed
 				ci.draw_line(Vector2(dx2, r.end.y - s * 0.02), Vector2(dx2, r.end.y + stretch2), gl.darkened(0.05), s * 0.055 * (0.55 + 0.45 * k2))
 				ci.draw_circle(Vector2(dx2, r.end.y + stretch2), s * 0.045 * (0.55 + 0.45 * k2), gl.lightened(0.10))
 
-# ── 13 RETRO (v4: raised 8-bit arcade button + CRT scanline sweep) ───────────
-# The block is a chunky 3D pixel button — top/left pixels lit, bottom/right
-# shaded — with a dithered interior, a bright glint, a scanline rolling down
-# the "screen" and a blinking twinkle pixel.
+# ── 13 RETRO (v5: glowing LED dot-matrix display) ────────────────────────────
+# A retro arcade LED panel: a grid of round lit dots in the piece colour on a
+# dark board, with a bright refresh scan rolling down it like an old marquee.
 static func _retro(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, seed_v: int) -> void:
-	var px := s / 8.0
 	var t := Time.get_ticks_msec() * 0.001
-	# Hard drop shadow (no soft edges in 8-bit land)
-	ci.draw_rect(Rect2(r.position + Vector2(px * 0.8, px * 0.8), r.size), Color(0, 0, 0, 0.35), true)
-	var lite := col.lightened(0.48)
-	var lite2 := col.lightened(0.20)
-	var dark := col.darkened(0.42)
-	var dark2 := col.darkened(0.18)
-	for gy in 8:
-		for gx in 8:
-			var cell := Rect2(r.position + Vector2(float(gx) * px, float(gy) * px), Vector2(px + 0.6, px + 0.6))
-			var c : Color
-			# Two-pixel raised bevel: top/left light, bottom/right dark
-			if gx == 0 or gy == 0:
-				c = lite
-			elif gx == 7 or gy == 7:
-				c = dark
-			elif gx == 1 or gy == 1:
-				c = lite2
-			elif gx == 6 or gy == 6:
-				c = dark2
-			else:
-				# Flat face with a 2-tone dither check for that limited-palette feel
-				c = col if (gx + gy) % 2 == 0 else col.darkened(0.07)
-			ci.draw_rect(cell, c, true)
-	# Bright glint pixels, top-left interior (an L of light)
-	ci.draw_rect(Rect2(r.position + Vector2(px * 2.0, px * 2.0), Vector2(px * 2.0 + 0.6, px + 0.6)), col.lightened(0.78), true)
-	ci.draw_rect(Rect2(r.position + Vector2(px * 2.0, px * 3.0), Vector2(px + 0.6, px + 0.6)), col.lightened(0.78), true)
-	# CRT scanline rolling down the face (one fat pixel row, brightened)
-	var scan := int(fmod(t * 6.0 + float(seed_v % 8), 8.0))
-	if scan >= 1 and scan <= 6:
-		ci.draw_rect(Rect2(r.position + Vector2(px, float(scan) * px + px * 0.25), Vector2(s - px * 2.0, px * 0.5)),
-			Color(1, 1, 1, 0.16), true)
-	# A single twinkle pixel that blinks on the block's own phase
-	var bl := sin(t * 4.0 + float(seed_v) * 1.7)
-	if bl > 0.5:
-		var sxp := 4 + (seed_v % 2)
-		var syp := 4 + ((seed_v / 2) % 2)
-		ci.draw_rect(Rect2(r.position + Vector2(float(sxp) * px, float(syp) * px), Vector2(px + 0.6, px + 0.6)),
-			Color(1, 1, 1, (bl - 0.5) / 0.5 * 0.85), true)
+	ci.draw_rect(Rect2(r.position + Vector2(s * 0.04, s * 0.05), r.size), Color(0, 0, 0, 0.35), true)
+	rr_fill(ci, r, s * 0.12, Color(0.07, 0.07, 0.10))   # dark LED panel
+	var n := 5
+	var cw := r.size.x / float(n)
+	var ch := r.size.y / float(n)
+	var dotr := minf(cw, ch) * 0.38
+	var base := col.lightened(0.06)
+	var hi := base.lightened(0.55)
+	var scan := fmod(t * 5.0 + float(seed_v % 5), float(n) + 2.0) - 1.0   # rolling refresh row
+	for gy in n:
+		var glow : float = 1.0 - clampf(absf(float(gy) - scan), 0.0, 1.0)
+		var dome := base.lightened(glow * 0.40)
+		for gx in n:
+			var dc := r.position + Vector2((float(gx) + 0.5) * cw, (float(gy) + 0.5) * ch)
+			if glow > 0.05:
+				ci.draw_circle(dc, dotr * 1.30, Color(hi.r, hi.g, hi.b, glow * 0.22))   # scan bloom
+			ci.draw_circle(dc, dotr, base.darkened(0.38))            # LED bezel
+			ci.draw_circle(dc, dotr * 0.80, dome)                    # lit dome
+			ci.draw_circle(dc - Vector2(dotr * 0.26, dotr * 0.26), dotr * 0.32, hi)  # specular dot
+	rr_outline(ci, r, s * 0.12, Color(0.02, 0.02, 0.04, 0.9), 1.5)
 
 # ── 14 BUBBLE (animated: iridescent soap film) ────────────────────────────────
 static func _bubble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
@@ -1393,10 +1373,16 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 				continue
 			var hsh := absi((i * 73856093) ^ (j * 19349663))
 			var jhue : float = fmod(col.h + float(hsh % 1000) / 1000.0, 1.0)
-			# Drifting sunlight band brightens diamonds as it sweeps across
 			var wave : float = 0.5 + 0.5 * sin((cx + cy) / (ps * 2.6) - t * 0.7)
-			var jewel := Color.from_hsv(jhue, 0.86 - wave * 0.12, 0.72 + wave * 0.26)
-			draw_poly_safe(ci, clipped, jewel, true)
+			# Backlit glass: bright light behind, then the colour as a TRANSLUCENT
+			# layer over it. Where the light sweeps, the glass goes more transparent
+			# (paler/brighter) — like sun shining through from the far side.
+			draw_poly_safe(ci, clipped, Color(1.0, 0.98, 0.92), true)
+			var jewel := Color.from_hsv(jhue, 0.90, 1.0)
+			var ja : float = 0.50 + 0.24 * (1.0 - wave)
+			draw_poly_safe(ci, clipped, Color(jewel.r, jewel.g, jewel.b, ja), true)
+			# Glint where the light passes through the thin centre of the pane
+			ci.draw_circle(Vector2(cx, cy), gg * 0.22, Color(1, 1, 1, 0.10 + 0.22 * wave))
 			# Glass bevel — only on diamonds fully inside the block so the came
 			# lines never spill into the gaps between blocks
 			var v_top := Vector2(cx, cy - gg)
@@ -1404,9 +1390,9 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 			var v_right := Vector2(cx + gg, cy)
 			var v_bot := Vector2(cx, cy + gg)
 			if inner.has_point(v_top) and inner.has_point(v_left):
-				ci.draw_line(v_top, v_left, jewel.lightened(0.40), 1.0)
+				ci.draw_line(v_top, v_left, jewel.lightened(0.45), 1.0)
 			if inner.has_point(v_right) and inner.has_point(v_bot):
-				ci.draw_line(v_right, v_bot, jewel.darkened(0.30), 1.0)
+				ci.draw_line(v_right, v_bot, jewel.darkened(0.25), 1.0)
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
