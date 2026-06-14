@@ -25,6 +25,12 @@ const BAYER4 : Array = [
 # be painted in a second pass after all cells, or the row below covers them
 const OVERLAY_STYLES : Array = [12, 18]
 
+# Reused single-colour buffer for draw_polygon — avoids allocating a fresh
+# PackedColorArray on every one of the ~1000s of poly fills per frame (the GC
+# churn that caused occasional hitches). draw_polygon copies it on submit, so
+# reusing one shared buffer is safe.
+static var _cbuf : PackedColorArray = PackedColorArray([Color(1, 1, 1, 1)])
+
 # 8x8 pixel sprites for the RETRO skin ('X' = filled). Shading is automatic:
 # top-edge pixels get lit, bottom-edge pixels get shaded, plus a black outline.
 const RETRO_SPRITES : Array = [
@@ -174,11 +180,13 @@ static func draw_poly_safe(ci: CanvasItem, pts: PackedVector2Array, col: Color, 
 			area += a.x * b.y - b.x * a.y
 		if absf(area) < 2.0:
 			return
-		ci.draw_polygon(pts, PackedColorArray([col]))
+		_cbuf[0] = col
+		ci.draw_polygon(pts, _cbuf)
 		return
 	if Geometry2D.triangulate_polygon(pts).is_empty():
 		return
-	ci.draw_polygon(pts, PackedColorArray([col]))
+	_cbuf[0] = col
+	ci.draw_polygon(pts, _cbuf)
 
 static func _inside_edge(p: Vector2, r: Rect2, e: int) -> bool:
 	match e:
@@ -228,7 +236,8 @@ static func rr_fill(ci: CanvasItem, r: Rect2, rad: float, col: Color) -> void:
 	if r.size.x < 6.0 or r.size.y < 6.0:
 		ci.draw_rect(r, col, true)
 		return
-	ci.draw_polygon(rr_points(r, rad), PackedColorArray([col]))
+	_cbuf[0] = col
+	ci.draw_polygon(rr_points(r, rad), _cbuf)
 
 static func rr_outline(ci: CanvasItem, r: Rect2, rad: float, col: Color, width: float) -> void:
 	if r.size.x < 6.0 or r.size.y < 6.0:
@@ -519,7 +528,7 @@ static func _water(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	for i in range(n, -1, -1):
 		ribbon.append(Vector2(top[i].x, top[i].y + s * 0.08))
 	ribbon = clip_poly_to_rect(ribbon, r)
-	draw_poly_safe(ci, ribbon, Color(1, 1, 1, 0.20))
+	draw_poly_safe(ci, ribbon, Color(1, 1, 1, 0.20), true)
 	ci.draw_polyline(top, Color(1, 1, 1, 0.55), 1.5)
 	# Rising bubbles — sway as they climb, shrink and fade near the surface
 	for i in 3:
@@ -1147,7 +1156,7 @@ static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 			var poly := top.duplicate()
 			for k in range(bot.size() - 1, -1, -1):
 				poly.append(bot[k])
-			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])))
+			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])), true)
 	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
 
 # ── 21 PLASMA (animated: electric energy ball) ───────────────────────────────
