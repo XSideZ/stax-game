@@ -204,7 +204,7 @@ func ach_info(key: String) -> Dictionary:
 # Loops until stable: an XP grant can raise the level (Climber) or unlock a skin
 # (Collector), which can unlock more — so one call settles the whole cascade and
 # the next call returns nothing. Returns the freshly unlocked keys (for toasts).
-func check_unlocks() -> Array:
+func check_unlocks(grant_xp: bool = true) -> Array:
 	var all_fresh : Array = []
 	while true:
 		var fresh : Array = []
@@ -216,7 +216,8 @@ func check_unlocks() -> Array:
 					continue
 				if v >= g["tiers"][ti][0]:
 					unlocked[key] = true
-					player_xp += g["tiers"][ti][1]
+					if grant_xp:
+						player_xp += g["tiers"][ti][1]
 					fresh.append(key)
 		if fresh.is_empty():
 			break
@@ -344,7 +345,8 @@ const THEMES: Array = [
 
 func _ready() -> void:
 	_load()
-	check_unlocks()   # silent retroactive reconcile at boot
+	check_unlocks(false)   # mark already-earned achievements done WITHOUT granting
+						   # XP — you only gain levels by playing, not by launching
 	check_skin_unlocks()   # mark already-earned skins as seen (no toast flood)
 
 func submit_score(s: int) -> void:
