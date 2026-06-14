@@ -1463,38 +1463,40 @@ static func _leaf(ci: CanvasItem, p: Vector2, ang: float, size_f: float, col: Co
 		var basep := p + Vector2((-(0.85) * sa), ((0.85) * ca)) * size_f
 		ci.draw_line(basep, tip, Color(col.darkened(0.35).r, col.darkened(0.35).g, col.darkened(0.35).b, 0.6), 1.0)
 
-# ── 29 WARP (animated: hyperspace — star streaks, kept inside each block) ────
-# Streaks point radially outward (from the board centre) for a tunnel feel, but
-# both ends are clamped to the block so nothing ever spills past the edges.
+# ── 29 WARP (animated: a swirling wormhole vortex, self-contained) ───────────
+# Deep-space block with rotating spiral arms, rings rushing outward and a bright
+# pulsing core — a hyperspace portal. Everything stays within the block radius.
 static func _warp(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
 	var t := Time.get_ticks_msec() * 0.001
+	var ph0 := float(seed_v) * 0.6   # per-block phase so blocks aren't identical
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	var deep := col.lerp(Color(0.03, 0.04, 0.13), 0.82)
-	rr_grad(ci, r, rad, deep.lightened(0.06), deep.darkened(0.12))
-	var inner := r.grow(-s * 0.05)
-	var center := r.get_center()
-	var radial := center - Vector2(184.0, 184.0)   # board centre (grid-local)
-	var dist := radial.length()
-	var dir := radial.normalized() if dist > 1.0 else Vector2(0.0, -1.0)
-	var perp := dir.orthogonal()
-	var reach := minf(inner.size.x, inner.size.y)
-	var span := reach * (0.55 + clampf(dist / (s * 6.0), 0.0, 1.0) * 0.4)
-	var h := absi(seed_v * 2654435 + 7)
-	for i in 5:
-		var ph : float = fmod(t * (0.5 + float(i % 3) * 0.25) + float((h >> i) % 97) * 0.05, 1.0)
-		var poff : float = (float((h >> (i + 5)) % 100) / 100.0 - 0.5) * reach * 0.7
-		var head := center + dir * (ph - 0.5) * span + perp * poff
-		var tail := head - dir * (span * (0.22 + ph * 0.5))
-		head = head.clamp(inner.position, inner.end)
-		tail = tail.clamp(inner.position, inner.end)
-		var bright := 1.0 - absf(ph - 0.55) * 1.7
-		if bright > 0.0:
-			ci.draw_line(tail, head, Color(0.70, 0.85, 1.0, bright * 0.8), 1.0 + ph * 1.6)
-			ci.draw_circle(head, 1.0 + ph * 1.5, Color(1, 1, 1, bright))
-	# Steady twinkle stars (inside the block)
-	for j in 3:
-		var sx : float = inner.position.x + inner.size.x * float((absi(seed_v) * 13 + j * 41) % 100) / 100.0
-		var sy : float = inner.position.y + inner.size.y * float((absi(seed_v) * 7 + j * 53) % 100) / 100.0
-		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(j + seed_v)))
-		ci.draw_circle(Vector2(sx, sy), s * 0.012, Color(1, 1, 1, 0.5 * tw))
-	rr_outline(ci, r, rad, Color(0.4, 0.5, 0.8, 0.4), 1.5)
+	var deep := col.lerp(Color(0.05, 0.03, 0.17), 0.80)
+	rr_grad(ci, r, rad, deep.lightened(0.05), Color(0.02, 0.02, 0.08))
+	var c := r.get_center()
+	var maxr := s * 0.44
+	# Outer energy haze
+	ci.draw_circle(c, maxr, Color(0.30, 0.42, 0.95, 0.06))
+	# Rings rushing outward (the tunnel)
+	for i in 3:
+		var rp : float = fmod(t * 0.5 + ph0 + float(i) / 3.0, 1.0)
+		ci.draw_arc(c, rp * maxr, 0, TAU, 28, Color(0.55, 0.80, 1.0, (1.0 - rp) * 0.40), 1.5, true)
+	# Spiral arms swirling inward, brighter + fatter toward the core
+	var arms := 2
+	var steps := 14
+	for arm in arms:
+		var a0 := t * 1.5 + ph0 + float(arm) / float(arms) * TAU
+		var prev := c
+		for i in steps + 1:
+			var f : float = float(i) / float(steps)
+			var ang : float = a0 + f * 4.6   # twist
+			var p := c + Vector2(cos(ang), sin(ang)) * (f * maxr)
+			if i > 0:
+				var a : float = lerpf(0.75, 0.05, f)
+				var hue := fmod(0.58 + f * 0.18 + ph0 * 0.05, 1.0)
+				ci.draw_line(prev, p, Color.from_hsv(hue, 0.45, 1.0, a), lerpf(2.6, 0.8, f))
+			prev = p
+	# Bright pulsing core with a white-hot centre
+	var pulse := 0.5 + 0.5 * sin(t * 3.0 + ph0)
+	ci.draw_circle(c, s * (0.07 + 0.025 * pulse), Color(0.70, 0.90, 1.0, 0.40 + 0.30 * pulse))
+	ci.draw_circle(c, s * 0.035, Color(1, 1, 1, 0.85 + 0.15 * pulse))
+	rr_outline(ci, r, rad, Color(0.40, 0.50, 0.90, 0.40), 1.5)
