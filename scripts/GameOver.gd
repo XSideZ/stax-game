@@ -267,7 +267,7 @@ func _show_achievement_toast(id: String, delay: float) -> void:
 	header.add_theme_color_override("font_color", Color(1, 1, 1, 0.50))
 	vbox.add_child(header)
 	var title := Label.new()
-	title.text = a["name"] if is_skin else a["name"] + "   +" + str(a["xp"]) + " XP"
+	title.text = a["name"] if (is_skin or int(a["xp"]) == 0) else a["name"] + "   +" + str(a["xp"]) + " XP"
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color(0.55, 0.90, 1.0) if is_skin else Color(0.95, 0.78, 0.20))
 	vbox.add_child(title)

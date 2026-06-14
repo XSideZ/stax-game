@@ -682,7 +682,7 @@ func _make_ach_card(g: Dictionary) -> PanelContainer:
 		chip_xp = 0
 		for tier in tiers:
 			chip_xp += tier[1]
-	chip.text = "+" + str(chip_xp) + " XP"
+	chip.text = "MILESTONE" if chip_xp == 0 else "+" + str(chip_xp) + " XP"
 	chip.add_theme_font_size_override("font_size", 13)
 	var csb := StyleBoxFlat.new()
 	csb.set_corner_radius_all(10)
@@ -722,7 +722,8 @@ func _make_tier_list(g: Dictionary) -> PanelContainer:
 		var row := Label.new()
 		var numeral : String = GameState.TIER_NUMERALS[ti] if g["tiers"].size() > 1 else "I"
 		var state : String = "DONE" if got else ("NEXT" if ti == cur else "LOCKED")
-		row.text = numeral + "    " + _ach_desc(g, tier[0]) + "    ·    +" + str(tier[1]) + " XP    ·    " + state
+		var xp_str : String = "MILESTONE" if int(tier[1]) == 0 else "+" + str(tier[1]) + " XP"
+		row.text = numeral + "    " + _ach_desc(g, tier[0]) + "    ·    " + xp_str + "    ·    " + state
 		row.add_theme_font_size_override("font_size", 12)
 		if got:
 			row.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20, 0.95))

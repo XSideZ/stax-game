@@ -42,9 +42,9 @@ func set_cat_mode(on: bool) -> void:
 # "<ach_group>" (complete that achievement's first tier). Index = skin/theme idx.
 const SKIN_UNLOCK : Dictionary = {
 	0:  "start",  1:  "start",  7:  "start",  8:  "start",  11: "start",
-	13: "L3",     2:  "L4",     10: "L6",     5:  "L8",     6:  "L10",
-	18: "L13",    22: "L16",    28: "L19",    27: "L22",    16: "L25",
-	23: "L28",    25: "L32",    9:  "L36",    12: "L40",
+	13: "L3",     2:  "L6",     10: "L10",    5:  "L14",    6:  "L19",
+	18: "L24",    22: "L30",    28: "L37",    27: "L44",    16: "L52",
+	23: "L60",    25: "L68",    9:  "L78",    12: "L88",
 	4:  "score",  3:  "blocks", 14: "games",  15: "streak", 17: "boards",
 	19: "multi",  20: "lines",  21: "powers", 24: "level",  26: "marathon", 29: "collector",
 }
@@ -57,7 +57,12 @@ func is_skin_unlocked(idx: int) -> bool:
 		return true
 	if rule.begins_with("L"):
 		return get_level() >= int(rule.substr(1))
-	return unlocked.get(rule + "_0", false)   # achievement first tier complete
+	# Achievement skin: requires the FULL quest (its last tier) complete — a real
+	# long-term chase rather than an easy first-tier unlock.
+	var g := ach_group(rule)
+	if g.is_empty():
+		return false
+	return unlocked.get("%s_%d" % [rule, g["tiers"].size() - 1], false)
 
 func count_unlocked_skins() -> int:
 	var n := 0
@@ -144,10 +149,12 @@ const ACH_GROUPS : Array = [
 	{"id": "multi",  "name": "Combo King",     "desc": "Clear %s lines in one move",     "tiers": [[2, 50], [3, 150], [4, 400]]},
 	{"id": "blocks", "name": "Master Builder", "desc": "Place %s blocks in total",       "tiers": [[100, 50], [1000, 150], [5000, 300]]},
 	{"id": "boards", "name": "Clean Sweep",    "desc": "Empty the whole board %s times", "tiers": [[1, 75], [5, 200], [25, 500]]},
-	{"id": "level",  "name": "Climber",        "desc": "Reach level %s",                 "tiers": [[5, 100], [15, 250], [30, 600]]},
+	# Climber + Collector are PROGRESSION milestones (level / skins are downstream
+	# of XP) — they grant 0 XP so completing them can't feed back into more levels.
+	{"id": "level",  "name": "Climber",        "desc": "Reach level %s",                 "tiers": [[5, 0], [15, 0], [30, 0]]},
 	{"id": "powers", "name": "Powerhouse",     "desc": "Use %s abilities",               "tiers": [[10, 100], [50, 250], [150, 500]]},
 	{"id": "marathon","name": "Marathon",      "desc": "Clear %s lines in one run",      "tiers": [[30, 100], [75, 300], [150, 600]]},
-	{"id": "collector","name": "Collector",    "desc": "Unlock %s skins",                "tiers": [[6, 100], [14, 250], [24, 600]]},
+	{"id": "collector","name": "Collector",    "desc": "Unlock %s skins",                "tiers": [[6, 0], [14, 0], [24, 0]]},
 	{"id": "revive", "name": "Second Wind",    "desc": "Continue a run with a revive",   "tiers": [[1, 100]]},
 ]
 const TIER_NUMERALS : Array = ["I", "II", "III"]
