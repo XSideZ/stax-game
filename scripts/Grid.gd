@@ -40,6 +40,8 @@ var slamming  : bool  = false
 var slam_t    : float = 0.0
 var slam_anim : Array = []   # {from: px, to: px, color, seed}
 
+var _anim_accum : float = 0.0   # throttles animated-skin redraws to ~30fps
+
 func _ready() -> void:
 	cells.resize(ROWS)
 	seeds.resize(ROWS)
@@ -84,9 +86,13 @@ func _process(delta: float) -> void:
 	if not preview_cells.is_empty():
 		needs_redraw = true
 
-	# Animated skins (water/lava/galaxy) live-update
+	# Animated skins live-update, but cap to ~30fps — the 64-cell procedural
+	# redraw is the heavy part on mobile, and the drift looks smooth at 30
 	if BlockSkins.ANIMATED.has(block_style):
-		needs_redraw = true
+		_anim_accum += delta
+		if _anim_accum >= 0.033:
+			_anim_accum = 0.0
+			needs_redraw = true
 
 	if needs_redraw:
 		queue_redraw()

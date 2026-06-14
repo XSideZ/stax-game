@@ -161,8 +161,20 @@ static func clip_poly_to_rect(pts: PackedVector2Array, r: Rect2) -> PackedVector
 # degenerate input: zero-area slivers, duplicate/collinear points, or a self-
 # intersecting outline. Clipped patterns hit all three at block edges. Pre-check
 # with the same ear-clipping triangulator and silently skip if it can't be drawn.
-static func draw_poly_safe(ci: CanvasItem, pts: PackedVector2Array, col: Color) -> void:
+static func draw_poly_safe(ci: CanvasItem, pts: PackedVector2Array, col: Color, assume_convex: bool = false) -> void:
 	if pts.size() < 3:
+		return
+	# Convex callers (hex/diamond tiles) skip the costly triangulation pre-check —
+	# a cheap shoelace area test is enough to drop degenerate slivers safely.
+	if assume_convex:
+		var area := 0.0
+		for i in pts.size():
+			var a := pts[i]
+			var b := pts[(i + 1) % pts.size()]
+			area += a.x * b.y - b.x * a.y
+		if absf(area) < 2.0:
+			return
+		ci.draw_polygon(pts, PackedColorArray([col]))
 		return
 	if Geometry2D.triangulate_polygon(pts).is_empty():
 		return
@@ -657,7 +669,7 @@ static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _
 				if not inner.has_point(pt):
 					fully_inside = false
 			var cell := clip_poly_to_rect(hex, inner)
-			draw_poly_safe(ci, cell, hn.darkened(0.22 + float(hh % 5) * 0.05))
+			draw_poly_safe(ci, cell, hn.darkened(0.22 + float(hh % 5) * 0.05), true)
 			# Wax-capped cells (only when the whole hex fits inside the block)
 			if fully_inside and hh % 3 == 0:
 				ci.draw_circle(hc, hs * 0.58, hn.lightened(0.22))
@@ -1375,10 +1387,17 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 			# Drifting sunlight band brightens diamonds as it sweeps across
 			var wave : float = 0.5 + 0.5 * sin((cx + cy) / (ps * 2.6) - t * 0.7)
 			var jewel := Color.from_hsv(jhue, 0.86 - wave * 0.12, 0.72 + wave * 0.26)
-			draw_poly_safe(ci, clipped, jewel)
-			# Glass bevel: bright top-left edges, shaded bottom-right
-			ci.draw_line(Vector2(cx, cy - gg), Vector2(cx - gg, cy), jewel.lightened(0.40), 1.0)
-			ci.draw_line(Vector2(cx + gg, cy), Vector2(cx, cy + gg), jewel.darkened(0.30), 1.0)
+			draw_poly_safe(ci, clipped, jewel, true)
+			# Glass bevel — only on diamonds fully inside the block so the came
+			# lines never spill into the gaps between blocks
+			var v_top := Vector2(cx, cy - gg)
+			var v_left := Vector2(cx - gg, cy)
+			var v_right := Vector2(cx + gg, cy)
+			var v_bot := Vector2(cx, cy + gg)
+			if inner.has_point(v_top) and inner.has_point(v_left):
+				ci.draw_line(v_top, v_left, jewel.lightened(0.40), 1.0)
+			if inner.has_point(v_right) and inner.has_point(v_bot):
+				ci.draw_line(v_right, v_bot, jewel.darkened(0.30), 1.0)
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────

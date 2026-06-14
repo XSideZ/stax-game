@@ -317,9 +317,15 @@ func _spawn_pieces() -> void:
 	placed        = [false, false, false]
 	dragging_slot = -1
 
+	# Early game: try to hand the player one piece that can empty the board, so
+	# full board-clears come constantly up front.
+	var forced_clear : Array = []
+	if sets_given < EARLY_CLEAR_SETS and randf() < EARLY_CLEAR_CHANCE:
+		forced_clear = _pick_board_clear_shape()
+
 	var picked_keys: Array = []
 	for _i in 3:
-		var shape := _pick_shape()
+		var shape : Array = forced_clear if (_i == 0 and not forced_clear.is_empty()) else _pick_shape()
 		var key   := str(shape)
 		# Never give three identical shapes — when blocked, pick from EARLY_SHAPES
 		# excluding the duplicate. Don't re-call _pick_shape() which may always
@@ -359,6 +365,12 @@ func _progression() -> float:
 # fast and double/triple clears set themselves up.
 const SMART_FADE_MOVES := 45.0
 
+# Early game = a fast "clear the whole board" puzzle. For the first few sets we
+# keep the board SMALL (no big builder dumps) and try to hand the player a piece
+# that can empty the board, so full board-clears happen constantly up front.
+const EARLY_CLEAR_SETS   := 9
+const EARLY_CLEAR_CHANCE := 0.85
+
 const BUILDER_SHAPES : Array = [
 	[[0,0],[1,0],[2,0],[3,0]],
 	[[0,0],[0,1],[0,2],[0,3]],
@@ -376,19 +388,22 @@ func _pick_shape() -> Array:
 		var smart := _pick_combo_shape()
 		if not smart.is_empty():
 			return smart
-		# Nothing completes a line yet — give mass so multi-clears build up
-		var fitting : Array = []
-		for bs in BUILDER_SHAPES:
-			for r in GRID_ROWS:
-				var fits := false
-				for c in GRID_COLS:
-					if grid.can_place(bs, r, c):
-						fits = true; break
-				if fits:
-					fitting.append(bs)
-					break
-		if not fitting.is_empty():
-			return fitting[randi() % fitting.size()]
+		# Past the early phase, when nothing completes a line, give big "builder"
+		# mass so multi-clears build up. EARLY on we skip this — small pieces keep
+		# the board low so clears keep emptying it (the fast board-clear loop).
+		if sets_given >= EARLY_CLEAR_SETS:
+			var fitting : Array = []
+			for bs in BUILDER_SHAPES:
+				for r in GRID_ROWS:
+					var fits := false
+					for c in GRID_COLS:
+						if grid.can_place(bs, r, c):
+							fits = true; break
+					if fits:
+						fitting.append(bs)
+						break
+			if not fitting.is_empty():
+				return fitting[randi() % fitting.size()]
 		return _pick_helpful_shape()
 	if randf() < _progression():
 		return SHAPES[randi() % SHAPES.size()]
@@ -444,6 +459,64 @@ func _pick_combo_shape() -> Array:
 	if best_lines >= 1 and not candidates.is_empty():
 		return candidates[randi() % candidates.size()]
 	return []
+
+# Find a shape that, placed somewhere, would clear the ENTIRE board (every filled
+# cell ends up in a completed row/col). Returns [] if no single piece can do it.
+func _pick_board_clear_shape() -> Array:
+	var filled : Array = []
+	for r in GRID_ROWS:
+		for c in GRID_COLS:
+			if grid.cells[r][c] != null:
+				filled.append(Vector2i(c, r))
+	if filled.is_empty():
+		return []
+	var row_fill : Array = []
+	var col_fill : Array = []
+	for r in GRID_ROWS:
+		var n := 0
+		for c in GRID_COLS:
+			if grid.cells[r][c] != null: n += 1
+		row_fill.append(n)
+	for c in GRID_COLS:
+		var n := 0
+		for r in GRID_ROWS:
+			if grid.cells[r][c] != null: n += 1
+		col_fill.append(n)
+	var cands : Array = []
+	for s in SHAPES:
+		var works := false
+		for r in GRID_ROWS:
+			for c in GRID_COLS:
+				if not grid.can_place(s, r, c):
+					continue
+				var rt := {}
+				var ct := {}
+				for cell in s:
+					rt[r + cell[1]] = rt.get(r + cell[1], 0) + 1
+					ct[c + cell[0]] = ct.get(c + cell[0], 0) + 1
+				var crows := {}
+				var ccols := {}
+				for rr in rt:
+					if row_fill[rr] + rt[rr] == GRID_COLS: crows[rr] = true
+				for cc in ct:
+					if col_fill[cc] + ct[cc] == GRID_ROWS: ccols[cc] = true
+				if crows.is_empty() and ccols.is_empty():
+					continue
+				var ok := true
+				for fc in filled:
+					if not crows.has(fc.y) and not ccols.has(fc.x):
+						ok = false; break
+				if ok:
+					for cell in s:
+						if not crows.has(r + cell[1]) and not ccols.has(c + cell[0]):
+							ok = false; break
+				if ok:
+					works = true; break
+			if works: break
+		if works: cands.append(s)
+	if cands.is_empty():
+		return []
+	return cands[randi() % cands.size()]
 
 func _pick_helpful_shape() -> Array:
 	var best_row    := -1
