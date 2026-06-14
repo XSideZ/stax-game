@@ -11,7 +11,7 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]
 
 # 4x4 ordered-dither (Bayer) matrix — the classic limited-palette gradient trick
 const BAYER4 : Array = [
@@ -528,7 +528,7 @@ static func _water(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	for i in range(n, -1, -1):
 		ribbon.append(Vector2(top[i].x, top[i].y + s * 0.08))
 	ribbon = clip_poly_to_rect(ribbon, r)
-	draw_poly_safe(ci, ribbon, Color(1, 1, 1, 0.20), true)
+	draw_poly_safe(ci, ribbon, Color(1, 1, 1, 0.20))
 	ci.draw_polyline(top, Color(1, 1, 1, 0.55), 1.5)
 	# Rising bubbles — sway as they climb, shrink and fade near the surface
 	for i in 3:
@@ -715,31 +715,33 @@ static func paint_overlay(ci: CanvasItem, style: int, r: Rect2, col: Color, seed
 				ci.draw_line(Vector2(dx2, r.end.y - s * 0.02), Vector2(dx2, r.end.y + stretch2), gl.darkened(0.05), s * 0.055 * (0.55 + 0.45 * k2))
 				ci.draw_circle(Vector2(dx2, r.end.y + stretch2), s * 0.045 * (0.55 + 0.45 * k2), gl.lightened(0.10))
 
-# ── 13 RETRO (v5: glowing LED dot-matrix display) ────────────────────────────
-# A retro arcade LED panel: a grid of round lit dots in the piece colour on a
-# dark board, with a bright refresh scan rolling down it like an old marquee.
-static func _retro(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, seed_v: int) -> void:
-	var t := Time.get_ticks_msec() * 0.001
-	ci.draw_rect(Rect2(r.position + Vector2(s * 0.04, s * 0.05), r.size), Color(0, 0, 0, 0.35), true)
-	rr_fill(ci, r, s * 0.12, Color(0.07, 0.07, 0.10))   # dark LED panel
-	var n := 5
-	var cw := r.size.x / float(n)
-	var ch := r.size.y / float(n)
-	var dotr := minf(cw, ch) * 0.38
-	var base := col.lightened(0.06)
-	var hi := base.lightened(0.55)
-	var scan := fmod(t * 5.0 + float(seed_v % 5), float(n) + 2.0) - 1.0   # rolling refresh row
-	for gy in n:
-		var glow : float = 1.0 - clampf(absf(float(gy) - scan), 0.0, 1.0)
-		var dome := base.lightened(glow * 0.40)
-		for gx in n:
-			var dc := r.position + Vector2((float(gx) + 0.5) * cw, (float(gy) + 0.5) * ch)
-			if glow > 0.05:
-				ci.draw_circle(dc, dotr * 1.30, Color(hi.r, hi.g, hi.b, glow * 0.22))   # scan bloom
-			ci.draw_circle(dc, dotr, base.darkened(0.38))            # LED bezel
-			ci.draw_circle(dc, dotr * 0.80, dome)                    # lit dome
-			ci.draw_circle(dc - Vector2(dotr * 0.26, dotr * 0.26), dotr * 0.32, hi)  # specular dot
-	rr_outline(ci, r, s * 0.12, Color(0.02, 0.02, 0.04, 0.9), 1.5)
+# ── 13 RETRO (v6: classic NES/Tetris bevelled block) ─────────────────────────
+# The quintessential 8-bit game block: chunky dark border, solid colour face,
+# a 3D pixel bevel (lit top-left, shaded bottom-right), the classic corner shine
+# square, and faint CRT scanlines. Static — clean and cheap (all rects).
+static func _retro(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, _seed_v: int) -> void:
+	# Hard pixel shadow
+	ci.draw_rect(Rect2(r.position + Vector2(s * 0.06, s * 0.06), r.size), Color(0, 0, 0, 0.35), true)
+	# Dark outer border, then the solid colour face inset within it
+	ci.draw_rect(r, col.darkened(0.55), true)
+	var bw := s * 0.10
+	var inner := Rect2(r.position + Vector2(bw, bw), r.size - Vector2(bw * 2.0, bw * 2.0))
+	ci.draw_rect(inner, col, true)
+	# 3D bevel: lit top + left edges, shaded bottom + right edges
+	var e := s * 0.07
+	var lite := col.lightened(0.45)
+	var dark := col.darkened(0.32)
+	ci.draw_rect(Rect2(inner.position, Vector2(inner.size.x, e)), lite, true)
+	ci.draw_rect(Rect2(inner.position, Vector2(e, inner.size.y)), lite, true)
+	ci.draw_rect(Rect2(Vector2(inner.position.x, inner.end.y - e), Vector2(inner.size.x, e)), dark, true)
+	ci.draw_rect(Rect2(Vector2(inner.end.x - e, inner.position.y), Vector2(e, inner.size.y)), dark, true)
+	# Classic corner shine square (top-left)
+	ci.draw_rect(Rect2(inner.position + Vector2(s * 0.13, s * 0.13), Vector2(s * 0.15, s * 0.15)), col.lightened(0.75), true)
+	# Faint CRT scanlines
+	var y := r.position.y + s * 0.16
+	while y < r.end.y - s * 0.05:
+		ci.draw_line(Vector2(r.position.x + bw, y), Vector2(r.end.x - bw, y), Color(0, 0, 0, 0.10), 1.0)
+		y += s * 0.20
 
 # ── 14 BUBBLE (animated: iridescent soap film) ────────────────────────────────
 static func _bubble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
@@ -1136,7 +1138,7 @@ static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 			var poly := top.duplicate()
 			for k in range(bot.size() - 1, -1, -1):
 				poly.append(bot[k])
-			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])), true)
+			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])))
 	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
 
 # ── 21 PLASMA (animated: electric energy ball) ───────────────────────────────
@@ -1298,7 +1300,7 @@ static func _hologram(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float
 # ── 25 PRISM (animated: clear glass refracting a rainbow that flows the board) ─
 # The spectrum hue is a function of CANVAS position + time, so one continuous
 # rainbow sweeps diagonally across every block. A caustic gleam travels too.
-static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
+static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
 	var ps := pr.size.x if pr.size.x > 0.0 else s
 	var t := Time.get_ticks_msec() * 0.001
 	var ctr := pr.get_center()
@@ -1381,8 +1383,10 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 			var jewel := Color.from_hsv(jhue, 0.90, 1.0)
 			var ja : float = 0.50 + 0.24 * (1.0 - wave)
 			draw_poly_safe(ci, clipped, Color(jewel.r, jewel.g, jewel.b, ja), true)
-			# Glint where the light passes through the thin centre of the pane
-			ci.draw_circle(Vector2(cx, cy), gg * 0.22, Color(1, 1, 1, 0.10 + 0.22 * wave))
+			# Glint where the light passes through the thin centre of the pane —
+			# only when the diamond's centre is inside this block (no stray orbs)
+			if inner.has_point(Vector2(cx, cy)):
+				ci.draw_circle(Vector2(cx, cy), gg * 0.22, Color(1, 1, 1, 0.10 + 0.22 * wave))
 			# Glass bevel — only on diamonds fully inside the block so the came
 			# lines never spill into the gaps between blocks
 			var v_top := Vector2(cx, cy - gg)
