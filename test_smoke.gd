@@ -198,18 +198,18 @@ func _initialize() -> void:
 		backup = FileAccess.get_file_as_bytes("user://stax_save.dat")
 	gs.player_xp = 0
 	gs.unlocked = {}
-	gs.best_score = 150   # past score tier I (100), short of tier II (1000)
+	gs.best_score = 1500   # past score tier I (1000), short of tier II (10000)
 	var fresh : Array = gs.check_unlocks()
 	if not fresh.has("score_0") or fresh.has("score_1"):
 		print("FAIL tiered unlock: ", fresh); fails += 1
-	if gs.player_xp < 50:
+	if gs.player_xp < 75:
 		print("FAIL tier xp: ", gs.player_xp); fails += 1
 	if not gs.check_unlocks().is_empty():
 		print("FAIL double unlock"); fails += 1
 	var info : Dictionary = gs.ach_info("score_0")
-	if info.get("name", "") != "High Scorer I" or info.get("xp", 0) != 50:
+	if info.get("name", "") != "High Scorer I" or info.get("xp", 0) != 75:
 		print("FAIL ach_info: ", info); fails += 1
-	gs.best_score = 1200
+	gs.best_score = 12000
 	if not gs.check_unlocks().has("score_1"):
 		print("FAIL next tier unlock"); fails += 1
 	if had_save:

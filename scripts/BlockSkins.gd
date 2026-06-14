@@ -11,7 +11,14 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30]
+
+# Rarity per skin (0 COMMON · 1 RARE · 2 EPIC · 3 LEGENDARY), mirrors the Biomes
+# gallery tiers. Drives the board-frame complexity (see paint_board_frame).
+const RARITY : Array = [
+	0, 0, 0, 0, 0,  1, 1, 1, 1, 2,  1, 3, 2, 1, 2,
+	3, 3, 2, 1, 2,  3, 3, 2, 3, 3,  3, 2, 2, 2, 2,  3,
+]
 
 # 4x4 ordered-dither (Bayer) matrix — the classic limited-palette gradient trick
 const BAYER4 : Array = [
@@ -256,6 +263,67 @@ static func rr_grad(ci: CanvasItem, r: Rect2, rad: float, top_col: Color, bot_co
 	for p in pts:
 		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
 	ci.draw_polygon(pts, cols)
+
+# ── Reactive board frame ──────────────────────────────────────────────────────
+# A biome-themed border drawn around the playing field. Complexity scales with
+# the skin's RARITY; NEON gets signature LEDs. `pulse` (0..1.5) spikes on row /
+# board clears (set by Grid) so the frame flares when the player scores.
+static func frame_animated(style: int) -> bool:
+	var rar : int = RARITY[style] if style < RARITY.size() else 0
+	return style == 1 or rar >= 2   # neon LEDs / epic glow / legendary orbit
+
+static func paint_board_frame(ci: CanvasItem, style: int, inner: Rect2, accent: Color, pulse: float) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	var rar : int = RARITY[style] if style < RARITY.size() else 0
+	var pls := clampf(pulse, 0.0, 1.5)
+	var f := inner.grow(5.0)
+	# Base outline — every biome, brightens with the clear pulse
+	rr_outline(ci, f, 11.0, Color(accent.r, accent.g, accent.b, 0.34 + 0.5 * minf(pls, 1.0)), 2.0 + pls * 1.5)
+	if style == 1:
+		_frame_leds(ci, f, accent, t, pls)
+		return
+	if rar >= 1:
+		_frame_corners(ci, f, accent.lightened(0.2), 17.0, 2.5 + pls)
+	if rar >= 2:
+		var g := 0.10 + 0.06 * sin(t * 2.0) + 0.20 * pls
+		rr_outline(ci, f.grow(3.0), 13.0, Color(accent.r, accent.g, accent.b, g), 4.0 + pls * 3.0)
+	if rar >= 3:
+		for k in 2:
+			var lp := _perim_point(f, fmod(t * 0.22 + float(k) * 0.5, 1.0))
+			ci.draw_circle(lp, 8.0 + pls * 4.0, Color(accent.r, accent.g, accent.b, 0.35))
+			ci.draw_circle(lp, 4.0 + pls * 3.0, Color(1, 1, 1, 0.7))
+
+static func _frame_corners(ci: CanvasItem, r: Rect2, col: Color, ln: float, w: float) -> void:
+	var c := Color(col.r, col.g, col.b, 0.88)
+	for corner : Vector2 in [r.position, Vector2(r.end.x, r.position.y), Vector2(r.position.x, r.end.y), r.end]:
+		var sx := 1.0 if corner.x <= r.position.x + 1.0 else -1.0
+		var sy := 1.0 if corner.y <= r.position.y + 1.0 else -1.0
+		ci.draw_line(corner, corner + Vector2(ln * sx, 0.0), c, w)
+		ci.draw_line(corner, corner + Vector2(0.0, ln * sy), c, w)
+
+# Point at parameter p (0..1) walking clockwise around the rect perimeter
+static func _perim_point(r: Rect2, p: float) -> Vector2:
+	var w := r.size.x
+	var h := r.size.y
+	var d := fmod(p, 1.0) * 2.0 * (w + h)
+	if d < w:         return Vector2(r.position.x + d, r.position.y)
+	d -= w
+	if d < h:         return Vector2(r.end.x, r.position.y + d)
+	d -= h
+	if d < w:         return Vector2(r.end.x - d, r.end.y)
+	d -= w
+	return Vector2(r.position.x, r.end.y - d)
+
+static func _frame_leds(ci: CanvasItem, r: Rect2, col: Color, t: float, pls: float) -> void:
+	var n := 30
+	for i in n:
+		var lp := _perim_point(r, float(i) / float(n))
+		var wave := 0.5 + 0.5 * sin(t * 4.0 - float(i) * 0.55)   # chase around the ring
+		var a := minf(0.22 + 0.45 * wave + 0.32 * pls, 1.0)
+		var sz := 2.0 + 1.4 * wave + 2.0 * pls
+		ci.draw_circle(lp, sz + 2.0, Color(col.r, col.g, col.b, a * 0.35))
+		ci.draw_circle(lp, sz, Color(col.r, col.g, col.b, a))
+		ci.draw_circle(lp, sz * 0.4, Color(1, 1, 1, a * 0.85))
 
 # ── 0 PASTEL ──────────────────────────────────────────────────────────────────
 static func _pastel(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float) -> void:
@@ -1402,8 +1470,7 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
 # Sunset gradient, a glowing horizon, CRT scanlines + a sweep that ride INSIDE
 # the block, and a magenta/cyan neon double-edge. Everything stays in bounds.
-static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var t := Time.get_ticks_msec() * 0.001
+static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int) -> void:
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
 	var top := col.lerp(Color(1.0, 0.18, 0.62), 0.60)   # hot magenta
 	var bot := col.lerp(Color(0.22, 0.55, 1.0), 0.55)   # cyan
@@ -1420,11 +1487,6 @@ static func _synthwave(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: floa
 		var a : float = 0.10 + 0.12 * (1.0 - absf(fy - 0.5) * 2.0)
 		ci.draw_line(Vector2(r.position.x + s * 0.08, ly), Vector2(r.end.x - s * 0.08, ly),
 			Color(0.6, 1.0, 0.95, a), 1.0)
-	# Bright scan sweep travelling down within the block, wrapping
-	var sweep : float = fmod(t * 0.5 + float(seed_v % 10) * 0.1, 1.0)
-	var sy : float = r.position.y + s * 0.10 + sweep * (r.size.y - s * 0.20)
-	ci.draw_line(Vector2(r.position.x + s * 0.08, sy), Vector2(r.end.x - s * 0.08, sy),
-		Color(1.0, 0.95, 0.7, 0.5 * (1.0 - sweep * 0.5)), 2.0)
 	# Chrome top catch + neon double edge (magenta outer, cyan inner)
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.08, s * 0.06), Vector2(r.size.x - s * 0.16, s * 0.06)),
 		s * 0.03, Color(1, 1, 1, 0.18))

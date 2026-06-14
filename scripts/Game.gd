@@ -101,6 +101,11 @@ const SLOT_W    := 138.0
 # doesn't cover them
 const DRAG_LIFT := 70.0
 
+# How far (in cells) the snap will reach for the nearest valid spot when the
+# touch isn't dead-on — bigger = more forgiving for fast play. The ghost shows
+# exactly where it lands, so over-reach stays visible before releasing.
+const SNAP_REACH := 2
+
 # ── Power meter ───────────────────────────────────────────────────────────────
 # One charge bar fills from clears. Spend it (tap the orb) on the best ability
 # it can afford: ¼ Bomb, ½ Laser, FULL Gravity Slam (the ultimate).
@@ -368,8 +373,8 @@ const SMART_FADE_MOVES := 45.0
 # Early game = a fast "clear the whole board" puzzle. For the first few sets we
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
-const EARLY_CLEAR_SETS   := 9
-const EARLY_CLEAR_CHANCE := 0.92
+const EARLY_CLEAR_SETS   := 14
+const EARLY_CLEAR_CHANCE := 1.0
 
 const BUILDER_SHAPES : Array = [
 	[[0,0],[1,0],[2,0],[3,0]],
@@ -386,6 +391,12 @@ func _pick_shape() -> Array:
 	# EARLY GAME = a fast board-clear puzzle: ONLY small pieces, strongly biased to
 	# completing lines, so the board stays tiny and clears keep emptying it.
 	if sets_given < EARLY_CLEAR_SETS:
+		# Every early piece prefers (1) a shape that empties the whole board, then
+		# (2) one that completes a line, then (3) a small filler — so the opening
+		# is a constant, easy board-clear loop, not just the occasional slot-0 gift.
+		var bc := _pick_board_clear_shape()
+		if not bc.is_empty():
+			return bc
 		var small := _pick_combo_shape(EARLY_SHAPES)
 		if not small.is_empty():
 			return small
@@ -825,48 +836,46 @@ func _power_bomb() -> void:
 
 func _power_laser() -> void:
 	power_busy = true
-	var orient := randi() % 4   # 0 row · 1 col · 2 diag↘ · 3 diag↙
-	var cell_list : Array = []
+	# A bolt of lightning that ricochets diagonally around the board, burning
+	# every cell on its zig-zag path — far bigger than the old straight line.
 	var half := CELL * 0.5
-	var a : Vector2
-	var b : Vector2
-	if orient == 0:
-		var rr := randi() % GRID_ROWS
-		for c in GRID_COLS:
-			cell_list.append(Vector2i(c, rr))
-		var y := GRID_Y + float(rr) * GRID_STEP + half
-		a = Vector2(GRID_X, y)
-		b = Vector2(GRID_X + GRID_COLS * GRID_STEP, y)
-	elif orient == 1:
-		var cc := randi() % GRID_COLS
-		for r in GRID_ROWS:
-			cell_list.append(Vector2i(cc, r))
-		var x := GRID_X + float(cc) * GRID_STEP + half
-		a = Vector2(x, GRID_Y)
-		b = Vector2(x, GRID_Y + GRID_ROWS * GRID_STEP)
-	elif orient == 2:
-		for i in GRID_ROWS:
-			cell_list.append(Vector2i(i, i))
-		a = Vector2(GRID_X + half, GRID_Y + half)
-		b = Vector2(GRID_X + float(GRID_COLS - 1) * GRID_STEP + half,
-			GRID_Y + float(GRID_ROWS - 1) * GRID_STEP + half)
-	else:
-		for i in GRID_ROWS:
-			cell_list.append(Vector2i(GRID_COLS - 1 - i, i))
-		a = Vector2(GRID_X + float(GRID_COLS - 1) * GRID_STEP + half, GRID_Y + half)
-		b = Vector2(GRID_X + half, GRID_Y + float(GRID_ROWS - 1) * GRID_STEP + half)
-	var lcol := Color(0.45, 0.95, 1.0)
-	effects.append({"type": "laser_charge", "t": 0.0, "dur": 0.30, "a": a, "b": b, "color": lcol})
+	var seq : Array = []          # full bounce trajectory (may revisit cells)
+	var cell_list : Array = []    # distinct cells to incinerate
+	var seen : Dictionary = {}
+	var pos := Vector2i(randi() % GRID_COLS, randi() % GRID_ROWS)
+	var vel := Vector2i(1 if randi() % 2 == 0 else -1, 1 if randi() % 2 == 0 else -1)
+	var steps := 16 + randi() % 8   # 16..23 ricochets → a long, wild zig-zag
+	for _s in steps:
+		seq.append(pos)
+		if not seen.has(pos):
+			seen[pos] = true
+			cell_list.append(pos)
+		var nx := pos.x + vel.x
+		var ny := pos.y + vel.y
+		if nx < 0 or nx >= GRID_COLS:
+			vel.x = -vel.x
+			nx = pos.x + vel.x
+		if ny < 0 or ny >= GRID_ROWS:
+			vel.y = -vel.y
+			ny = pos.y + vel.y
+		pos = Vector2i(nx, ny)
+	# Screen-space polyline through every bounce point for the beam FX
+	var path := PackedVector2Array()
+	for cv : Vector2i in seq:
+		path.append(Vector2(GRID_X + float(cv.x) * GRID_STEP + half,
+			GRID_Y + float(cv.y) * GRID_STEP + half))
+	var lcol := Color(0.55, 0.95, 1.0)
+	effects.append({"type": "laser_charge", "t": 0.0, "dur": 0.30, "path": path, "color": lcol})
 	fx_layer.queue_redraw()
 	await get_tree().create_timer(0.30).timeout
-	effects.append({"type": "laser_fire", "t": 0.0, "dur": 0.5, "a": a, "b": b, "color": lcol})
-	shake_t   = maxf(shake_t, 0.30)
-	flash_t   = maxf(flash_t, 0.35)
+	effects.append({"type": "laser_fire", "t": 0.0, "dur": 0.5, "path": path, "color": lcol})
+	shake_t   = maxf(shake_t, 0.40)
+	flash_t   = maxf(flash_t, 0.40)
 	flash_col = Color(0.6, 0.95, 1.0, 1.0)
-	_buzz(45)
-	Sfx.play_clear(2)
+	_buzz(55)
+	Sfx.play_clear(3)
 	var cleared := grid.laser_clear(cell_list, Vector2(3.5, 3.5))
-	_award_power_clear(cleared, 1)
+	_award_power_clear(cleared, 2)
 	await get_tree().create_timer(0.35).timeout
 	power_busy = false
 	queue_redraw()
@@ -885,7 +894,8 @@ func _power_gravity() -> void:
 	shake_t = maxf(shake_t, 0.65)
 	_buzz(120)
 	Sfx.play_board_clear()
-	var cleared := grid.check_and_clear()
+	# Slammed so hard the impact edge shatters — plus any line it completed
+	var cleared := grid.slam_clear(dir)
 	var lines := grid.last_lines_cleared
 	_award_power_clear(cleared, lines)
 	await get_tree().create_timer(0.4).timeout
@@ -969,11 +979,7 @@ func _show_achievement_toast(id: String) -> void:
 # Dev skin override (main-menu picker) wins over the theme — and drives the
 # WHOLE visual set (blocks, background colour, pattern, orbs), not just blocks
 func _visual_idx() -> int:
-	if GameState.cat_mode:
-		return GameState.CAT_SKIN
-	if GameState.dev_skin_override >= 0:
-		return GameState.dev_skin_override
-	return theme_idx
+	return GameState.effective_skin(theme_idx)
 
 func _apply_block_style() -> void:
 	grid.block_style = _visual_idx()
@@ -1016,8 +1022,8 @@ func _best_snap(pos: Vector2, shape: Array) -> Vector2i:
 		return base
 	var best := base
 	var best_d := 99.0
-	for dr in range(-1, 2):
-		for dc in range(-1, 2):
+	for dr in range(-SNAP_REACH, SNAP_REACH + 1):
+		for dc in range(-SNAP_REACH, SNAP_REACH + 1):
 			if grid.can_place(shape, base.y + dr, base.x + dc):
 				var d := Vector2(dc, dr).length()
 				if d < best_d:
@@ -1044,8 +1050,9 @@ func _advance_theme() -> void:
 	# AUTO cycles through every unlocked skin (shuffle bag) before any repeats
 	theme_idx = GameState.next_auto_theme(theme_idx)
 	GameState.set_theme(theme_idx)
-	# Skin override active: progression still ticks, but visuals stay locked
-	if GameState.dev_skin_override >= 0:
+	# Skin pinned (dev override OR player lock): progression still ticks, but the
+	# visuals — block style, background, orbs, flash, theme popup — stay put.
+	if GameState.dev_skin_override >= 0 or GameState.skin_locked:
 		return
 	prev_bg    = curr_bg
 	curr_bg    = THEMES[theme_idx]["bg"]
@@ -1937,44 +1944,36 @@ func _fx_bomb_blast(e: Dictionary, p: float) -> void:
 				Color(dcol.r, dcol.g, dcol.b, 1.0 - p), true)
 
 func _fx_laser_charge(e: Dictionary, p: float) -> void:
-	var a : Vector2 = e["a"]
-	var b : Vector2 = e["b"]
+	var path : PackedVector2Array = e["path"]
 	var col : Color = e["color"]
-	fx_layer.draw_line(a, b, Color(col.r, col.g, col.b, 0.15 + 0.5 * p), 1.0 + 2.0 * p)
-	fx_layer.draw_circle(a, 3.0 + 6.0 * p, Color(col.r, col.g, col.b, 0.4 * p))
-	fx_layer.draw_circle(b, 3.0 + 6.0 * p, Color(col.r, col.g, col.b, 0.4 * p))
-	var perp := (b - a).normalized().orthogonal()
-	for i in 8:
-		var on := a.lerp(b, float(i) / 7.0)
-		var side := 1.0 if i % 2 == 0 else -1.0
-		fx_layer.draw_circle(on + perp * (1.0 - p) * 30.0 * side, 2.0 * p,
-			Color(col.r, col.g, col.b, p * 0.8))
+	# gathering glow racing along the zig-zag
+	for i in range(path.size() - 1):
+		fx_layer.draw_line(path[i], path[i + 1], Color(col.r, col.g, col.b, 0.12 + 0.45 * p), 1.0 + 2.0 * p)
+	# sparks converging onto each bounce point
+	for i in path.size():
+		fx_layer.draw_circle(path[i], 2.0 + 4.0 * p, Color(col.r, col.g, col.b, 0.35 * p))
 
 func _fx_laser_fire(e: Dictionary, p: float) -> void:
-	var a : Vector2 = e["a"]
-	var b : Vector2 = e["b"]
+	var path : PackedVector2Array = e["path"]
 	var col : Color = e["color"]
 	var fade := 1.0 - p
-	var perp := (b - a).normalized().orthogonal()
-	# soft glow layers -> white-hot core
-	for layer : Array in [[22.0, 0.10], [14.0, 0.20], [7.0, 0.45]]:
-		fx_layer.draw_line(a, b, Color(col.r, col.g, col.b, fade * float(layer[1])),
-			float(layer[0]) * (0.6 + 0.4 * fade))
-	fx_layer.draw_line(a, b, Color(1, 1, 1, fade), 3.0)
-	# embers jittering along the beam
-	for i in 10:
-		var on := a.lerp(b, float(i) / 9.0)
-		var jit := perp * sin(e["t"] * 30.0 + float(i)) * 6.0 * fade
+	# soft glow layers -> white-hot core, every segment of the bolt
+	for layer : Array in [[20.0, 0.10], [12.0, 0.20], [6.0, 0.45]]:
+		for i in range(path.size() - 1):
+			fx_layer.draw_line(path[i], path[i + 1], Color(col.r, col.g, col.b, fade * float(layer[1])),
+				float(layer[0]) * (0.6 + 0.4 * fade))
+	for i in range(path.size() - 1):
+		fx_layer.draw_line(path[i], path[i + 1], Color(1, 1, 1, fade), 3.0)
+	# embers + flame licks flickering off each kink in the bolt
+	for i in path.size():
+		var on : Vector2 = path[i]
+		var jit := Vector2(sin(e["t"] * 30.0 + float(i)), cos(e["t"] * 24.0 + float(i))) * 5.0 * fade
 		fx_layer.draw_circle(on + jit, fade * (1.5 + float(i % 3)), Color(1.0, 1.0, 0.9, fade * 0.8))
-	# Flame licks rising off the burn line, flickering hot→cool
-	for i in 14:
-		var f := float(i) / 13.0
-		var on := a.lerp(b, f)
-		var rise := 8.0 + 22.0 * (1.0 - p)
+		var rise := 8.0 + 20.0 * fade
 		var fl := on + Vector2(sin(e["t"] * 22.0 + float(i) * 1.7) * 5.0, -rise)
-		var fsz := fade * (2.0 + float(i % 3) * 1.5)
+		var fsz := fade * (2.0 + float(i % 3) * 1.2)
 		if fsz > 0.4:
-			fx_layer.draw_circle(fl, fsz, Color(1.0, lerpf(0.75, 0.25, f), 0.12, fade * 0.55))
+			fx_layer.draw_circle(fl, fsz, Color(1.0, 0.55, 0.14, fade * 0.5))
 			fx_layer.draw_circle(on + Vector2(0, -rise * 0.4), fsz * 0.6, Color(1.0, 0.9, 0.4, fade * 0.6))
 
 func _fx_gravity(e: Dictionary, p: float) -> void:

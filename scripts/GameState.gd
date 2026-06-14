@@ -15,6 +15,13 @@ var revive_used : bool = false
 # Dev skin changer (main-menu picker, session-only): -1 = follow the theme
 var dev_skin_override : int = -1
 
+# Player biome (skin) choice from the Biomes gallery (persisted).
+#   picked_skin  = the chosen skin index (-1 = none chosen yet)
+#   skin_locked  = stay on picked_skin (no rotation). When false, AUTO still
+#                  cycles through the unlocked set as rows clear.
+var picked_skin : int  = -1
+var skin_locked : bool = false
+
 # AUTO-mode skin cycling uses a shuffle bag: every unlocked skin appears once
 # before any repeats. Persisted so the cycle carries across runs.
 var theme_bag : Array = []
@@ -27,26 +34,68 @@ var cat_mode : bool = false
 
 # Effective skin index, honoured by Game/MainMenu/GameOver
 func active_skin(theme_i: int) -> int:
+	return effective_skin(theme_i)
+
+# Single source of truth for "which skin to show" given the rotation index.
+# Priority: cat easter egg > dev picker > player lock > AUTO rotation.
+func effective_skin(rot: int) -> int:
 	if cat_mode:
 		return CAT_SKIN
 	if dev_skin_override >= 0:
 		return dev_skin_override
-	return theme_i % THEMES.size()
+	if skin_locked and picked_skin >= 0:
+		return picked_skin
+	return rot % THEMES.size()
+
+# Player taps an unlocked biome in the gallery. Switches to it now; when not
+# locked, AUTO rotation simply carries on from here through the unlocked set.
+func select_skin(idx: int) -> void:
+	if not is_skin_unlocked(idx):
+		return
+	picked_skin       = idx
+	theme_idx         = idx
+	theme_bag         = []     # reshuffle so the pick doesn't instantly repeat
+	dev_skin_override = -1      # a real pick clears any leftover dev override
+	_save()
+
+func set_skin_locked(on: bool) -> void:
+	skin_locked = on
+	# Locking with nothing chosen yet pins the current biome
+	if on and (picked_skin < 0 or not is_skin_unlocked(picked_skin)):
+		picked_skin = theme_idx % THEMES.size()
+	_save()
+
+# Human-readable unlock requirement for a locked biome ("" = starter / unlocked)
+func skin_unlock_hint(idx: int) -> String:
+	var rule : String = SKIN_UNLOCK.get(idx, "start")
+	if rule == "start":
+		return ""
+	if rule.begins_with("L"):
+		return "Reach level " + rule.substr(1)
+	var g := ach_group(rule)
+	if g.is_empty():
+		return ""
+	return "Complete " + str(g["name"])
 
 func set_cat_mode(on: bool) -> void:
 	cat_mode = on
 	_save()
 
-# ── Skin unlocks (earn via levels + achievements) ─────────────────────────────
+# ── Skin unlocks (4 tiers: Starter / T1 / T2 / T3) ────────────────────────────
 # Rule per skin: "start" (have from the off), "L<n>" (reach level n), or
-# "<ach_group>" (complete that achievement's first tier). Index = skin/theme idx.
+# "<ach_group>" (complete that achievement's LAST/hardest tier). Index = skin idx.
+# Difficulty climbs Starter -> T1 -> T2 -> T3; T3 = top levels + hardest missions.
 const SKIN_UNLOCK : Dictionary = {
-	0:  "start",  1:  "start",  7:  "start",  8:  "start",  11: "start",
-	13: "L3",     2:  "L6",     10: "L10",    5:  "L14",    6:  "L19",
-	18: "L24",    22: "L30",    28: "L37",    27: "L44",    16: "L52",
-	23: "L60",    25: "L68",    9:  "L78",    12: "L88",
-	4:  "score",  3:  "blocks", 14: "games",  15: "streak", 17: "boards",
-	19: "multi",  20: "lines",  21: "powers", 24: "level",  26: "marathon", 29: "collector",
+	# Starter — free from the start
+	0:  "start",  1:  "start",  2:  "start",  3:  "start",  4:  "start",
+	# Tier 1 — early levels
+	5:  "L3",     6:  "L5",     7:  "L7",     8:  "L9",     10: "L12",    13: "L15",    18: "L18",
+	# Tier 2 — mid / high levels
+	9:  "L22",    12: "L26",    14: "L30",    28: "L34",    22: "L38",    19: "L43",
+	27: "L48",    17: "L53",    26: "L58",    29: "L64",
+	# Tier 3 — top levels + hardest mission completions
+	16: "L70",    20: "L80",    11: "L90",
+	25: "score",  24: "marathon", 23: "boards", 21: "multi",  15: "powers",
 }
 
 func is_skin_unlocked(idx: int) -> bool:
@@ -142,17 +191,17 @@ func add_power_used() -> void:
 # only the current tier; tapping a card expands the full ladder. Unlock keys
 # are "<group>_<tier_index>".
 const ACH_GROUPS : Array = [
-	{"id": "games",  "name": "Dedicated",      "desc": "Play %s games",                  "tiers": [[1, 50], [5, 100], [10, 200]]},
-	{"id": "score",  "name": "High Scorer",    "desc": "Score %s in one run",            "tiers": [[100, 50], [1000, 150], [10000, 400]]},
+	{"id": "games",  "name": "Dedicated",      "desc": "Play %s games",                  "tiers": [[1, 50], [10, 200], [100, 600]]},
+	{"id": "score",  "name": "High Scorer",    "desc": "Score %s in one run",            "tiers": [[1000, 75], [10000, 300], [100000, 900]]},
 	{"id": "lines",  "name": "Line Clearer",   "desc": "Clear %s lines in total",        "tiers": [[50, 50], [500, 150], [2500, 350]]},
 	{"id": "streak", "name": "On Fire",        "desc": "Reach a streak of %s clears",    "tiers": [[3, 50], [5, 150], [8, 300]]},
-	{"id": "multi",  "name": "Combo King",     "desc": "Clear %s lines in one move",     "tiers": [[2, 50], [3, 150], [4, 400]]},
-	{"id": "blocks", "name": "Master Builder", "desc": "Place %s blocks in total",       "tiers": [[100, 50], [1000, 150], [5000, 300]]},
-	{"id": "boards", "name": "Clean Sweep",    "desc": "Empty the whole board %s times", "tiers": [[1, 75], [5, 200], [25, 500]]},
+	{"id": "multi",  "name": "Combo King",     "desc": "Clear %s lines in one move",     "tiers": [[2, 75], [4, 300], [5, 700]]},
+	{"id": "blocks", "name": "Master Builder", "desc": "Place %s blocks in total",       "tiers": [[100, 50], [1000, 150], [10000, 500]]},
+	{"id": "boards", "name": "Clean Sweep",    "desc": "Empty the whole board %s times", "tiers": [[5, 100], [25, 300], [50, 800]]},
 	# Climber + Collector are PROGRESSION milestones (level / skins are downstream
 	# of XP) — they grant 0 XP so completing them can't feed back into more levels.
-	{"id": "level",  "name": "Climber",        "desc": "Reach level %s",                 "tiers": [[5, 0], [15, 0], [30, 0]]},
-	{"id": "powers", "name": "Powerhouse",     "desc": "Use %s abilities",               "tiers": [[10, 100], [50, 250], [150, 500]]},
+	{"id": "level",  "name": "Climber",        "desc": "Reach level %s",                 "tiers": [[25, 0], [50, 0], [75, 0]]},
+	{"id": "powers", "name": "Powerhouse",     "desc": "Use %s abilities",               "tiers": [[25, 100], [100, 350], [250, 800]]},
 	{"id": "marathon","name": "Marathon",      "desc": "Clear %s lines in one run",      "tiers": [[30, 100], [75, 300], [150, 600]]},
 	{"id": "collector","name": "Collector",    "desc": "Unlock %s skins",                "tiers": [[6, 0], [14, 0], [24, 0]]},
 	{"id": "revive", "name": "Second Wind",    "desc": "Continue a run with a revive",   "tiers": [[1, 100]]},
@@ -491,6 +540,8 @@ func _save() -> void:
 	f.store_var(theme_bag)
 	f.store_var(stat_powers_used)
 	f.store_var(skins_seen)
+	f.store_var(picked_skin)
+	f.store_var(skin_locked)
 	f.close()
 
 func _load() -> void:
@@ -542,4 +593,8 @@ func _load() -> void:
 		stat_powers_used = f.get_var()
 	if f.get_position() < f.get_length():
 		skins_seen = f.get_var()
+	if f.get_position() < f.get_length():
+		picked_skin = f.get_var()
+	if f.get_position() < f.get_length():
+		skin_locked = f.get_var()
 	f.close()

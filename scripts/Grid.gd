@@ -34,6 +34,12 @@ var place_anim  : Array = []
 
 var last_place_center := Vector2.ZERO
 
+# Board-frame reaction: spikes on a clear, decays — drives the border flare
+var frame_pulse : float = 0.0
+
+func _bump_frame(strong: bool) -> void:
+	frame_pulse = maxf(frame_pulse, 1.5 if strong else 0.85)
+
 # Gravity-slam slide (the ultimate power) — blocks fly to one edge, then settle
 const SLAM_DUR := 0.42
 var slamming  : bool  = false
@@ -89,10 +95,22 @@ func _process(delta: float) -> void:
 	if BlockSkins.ANIMATED.has(block_style):
 		needs_redraw = true
 
+	# Board frame: decay the clear-flare, and keep animating fancy/LED frames
+	if frame_pulse > 0.0:
+		frame_pulse = maxf(0.0, frame_pulse - delta * 2.2)
+		needs_redraw = true
+	if BlockSkins.frame_animated(block_style):
+		needs_redraw = true
+
 	if needs_redraw:
 		queue_redraw()
 
 func _draw() -> void:
+	# Biome-themed border around the field, reacting to the latest clear
+	var td : Dictionary = GameState.THEMES[block_style % GameState.THEMES.size()]
+	var acc : Color = td.get("accent", Color(0.6, 0.8, 1.0))
+	BlockSkins.paint_board_frame(self, block_style,
+		Rect2(-2.0, -2.0, COLS * STEP - GAP + 4.0, ROWS * STEP - GAP + 4.0), acc, frame_pulse)
 	if slamming:
 		_draw_slam()
 		return
@@ -334,6 +352,7 @@ func check_and_clear() -> int:
 
 	clear_t  = 0.0
 	clearing = true
+	_bump_frame(is_board_empty())
 	queue_redraw()
 
 	# Returns CELLS cleared (crossing lines share cells) — Game.gd owns
@@ -449,6 +468,8 @@ func _start_pop(cell_list: Array, origin: Vector2) -> int:
 		n += 1
 	clear_t  = 0.0
 	clearing = true
+	if n > 0:
+		_bump_frame(is_board_empty())
 	queue_redraw()
 	return n
 
@@ -517,6 +538,40 @@ func start_slam(dir: Vector2i) -> void:
 	slam_t   = 0.0
 	slamming = true
 	queue_redraw()
+
+# After a slam settles: shatter the impact edge (the wall the blocks hit) PLUS
+# any fully completed row/col. The impact line clears even if it has gaps — the
+# slam "smashed" it. Sets last_lines_cleared for scoring; returns cells removed.
+func slam_clear(dir: Vector2i) -> int:
+	var clear_rows : Dictionary = {}
+	var clear_cols : Dictionary = {}
+	for r in ROWS:
+		var full := true
+		for c in COLS:
+			if cells[r][c] == null:
+				full = false; break
+		if full: clear_rows[r] = true
+	for c in COLS:
+		var full := true
+		for r in ROWS:
+			if cells[r][c] == null:
+				full = false; break
+		if full: clear_cols[c] = true
+	# The edge the blocks slammed into always shatters
+	if dir.y > 0:    clear_rows[ROWS - 1] = true
+	elif dir.y < 0:  clear_rows[0] = true
+	elif dir.x > 0:  clear_cols[COLS - 1] = true
+	elif dir.x < 0:  clear_cols[0] = true
+	last_lines_cleared = clear_rows.size() + clear_cols.size()
+	var cell_list : Array = []
+	for r in clear_rows:
+		for c in COLS:
+			cell_list.append(Vector2i(c, r))
+	for c in clear_cols:
+		for r in ROWS:
+			if not clear_rows.has(r):
+				cell_list.append(Vector2i(c, r))
+	return _start_pop(cell_list, last_place_center)
 
 # Slide render: empty board with blocks accelerating toward their packed spots.
 func _draw_slam() -> void:

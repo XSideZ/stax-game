@@ -367,14 +367,14 @@ func _process(delta: float) -> void:
 	faller_layer.queue_redraw()
 
 func _draw() -> void:
-	var skin := GameState.dev_skin_override if GameState.dev_skin_override >= 0 else GameState.theme_idx
+	var skin := GameState.effective_skin(GameState.theme_idx)
 	var bg : Color = GameState.THEMES[skin % GameState.THEMES.size()]["bg"]
 	draw_rect(Rect2(Vector2.ZERO, Vector2(414, 896)), bg.darkened(0.35), true)
 	for orb in orbs:
 		draw_circle(orb["pos"], orb["radius"], orb["color"])
 
 func _draw_fallers() -> void:
-	var style := GameState.dev_skin_override if GameState.dev_skin_override >= 0 else GameState.theme_idx % GameState.THEMES.size()
+	var style := GameState.effective_skin(GameState.theme_idx)
 	for f in fallers:
 		faller_layer.draw_set_transform(f["pos"], f["rot"])
 		var cs : float = f["cs"]

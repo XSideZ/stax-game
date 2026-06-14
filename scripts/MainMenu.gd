@@ -68,6 +68,7 @@ func _build_menu() -> void:
 	_build_buttons()
 	_build_settings_panel()
 	_build_achievements_panel()
+	_build_biomes_panel()
 	_build_stats_panel()
 	if SHOW_SKIN_PICKER:
 		_build_skin_picker()
@@ -84,13 +85,9 @@ func _make_faller(anywhere: bool) -> Dictionary:
 		"color": COLORS[randi() % COLORS.size()],
 	}
 
-# Current skin for menu decoration: dev override wins, else the theme's skin
+# Current skin for menu decoration (cat > dev > player lock > theme rotation)
 func _menu_skin() -> int:
-	if GameState.cat_mode:
-		return GameState.CAT_SKIN
-	if GameState.dev_skin_override >= 0:
-		return GameState.dev_skin_override
-	return GameState.theme_idx % GameState.THEMES.size()
+	return GameState.effective_skin(GameState.theme_idx)
 
 func _draw_fallers() -> void:
 	var style := _menu_skin()
@@ -125,6 +122,12 @@ func _process(delta: float) -> void:
 
 	queue_redraw()
 	faller_layer.queue_redraw()
+
+	# Keep animated biome previews alive while the gallery is open
+	if biome_box != null and biome_box.visible:
+		for sw in biome_swatches:
+			if is_instance_valid(sw):
+				sw.queue_redraw()
 
 # ── Background drawing — follows the selected skin's theme live ─────────────
 func _draw() -> void:
@@ -490,6 +493,13 @@ var ach_box      : PanelContainer
 var ach_rows     : VBoxContainer
 var ach_expanded : Dictionary = {}   # group id -> bool
 
+# ── Biomes (skins) gallery ───────────────────────────────────────────────────
+var biome_box      : PanelContainer
+var biome_rows     : VBoxContainer
+var biome_mode_btn : Button
+var biome_hint     : Label
+var biome_swatches : Array = []   # preview Controls redrawn each frame
+
 func _build_achievements_panel() -> void:
 	ach_box = PanelContainer.new()
 	var psb := StyleBoxFlat.new()
@@ -748,6 +758,244 @@ func _open_achievements() -> void:
 	var t := create_tween()
 	t.tween_property(ach_box, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
+# ── Biomes gallery ───────────────────────────────────────────────────────────
+# The whole gallery is gated until the player reaches this level.
+const BIOMES_UNLOCK_LEVEL := 3
+
+# Rarity tiers (mirror GameState.SKIN_UNLOCK). Indices are skin ids; color tints
+# the section header so rarity reads at a glance.
+const BIOME_TIERS : Array = [
+	{"name": "COMMON",    "color": Color(0.72, 0.76, 0.82), "skins": [0, 1, 2, 3, 4]},
+	{"name": "RARE",      "color": Color(0.35, 0.66, 0.98), "skins": [5, 6, 7, 8, 10, 13, 18]},
+	{"name": "EPIC",      "color": Color(0.74, 0.46, 0.99), "skins": [9, 12, 14, 28, 22, 19, 27, 17, 26, 29]},
+	{"name": "LEGENDARY", "color": Color(0.98, 0.79, 0.30), "skins": [16, 20, 11, 25, 24, 23, 21, 15]},
+]
+
+func _build_biomes_panel() -> void:
+	biome_box = PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.11, 0.14, 0.13)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.05, 0.07, 0.06)
+	psb.content_margin_left = 18; psb.content_margin_right = 18
+	psb.content_margin_top = 16;  psb.content_margin_bottom = 20
+	biome_box.add_theme_stylebox_override("panel", psb)
+	biome_box.position = Vector2(22, 64)
+	biome_box.custom_minimum_size = Vector2(370, 0)
+	biome_box.visible = false
+	ui.add_child(biome_box)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	biome_box.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "BIOMES"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	# Lock / shuffle toggle
+	biome_mode_btn = _make_chunky_button(_biome_mode_text(), Color(0.30, 0.80, 0.55), 18)
+	biome_mode_btn.custom_minimum_size = Vector2(0, 48)
+	biome_mode_btn.pressed.connect(func():
+		GameState.set_skin_locked(not GameState.skin_locked)
+		_refresh_biome_mode()
+		_populate_biomes())
+	vbox.add_child(biome_mode_btn)
+
+	biome_hint = Label.new()
+	biome_hint.add_theme_font_size_override("font_size", 13)
+	biome_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	biome_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	biome_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	biome_hint.custom_minimum_size = Vector2(334, 0)
+	vbox.add_child(biome_hint)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(334, 470)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(scroll)
+
+	biome_rows = VBoxContainer.new()
+	biome_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	biome_rows.add_theme_constant_override("separation", 10)
+	biome_rows.mouse_filter = Control.MOUSE_FILTER_PASS   # drags scroll, taps select
+	scroll.add_child(biome_rows)
+
+	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 18)
+	close.custom_minimum_size = Vector2(0, 50)
+	close.pressed.connect(func():
+		Sfx.play_click()
+		biome_box.visible = false)
+	vbox.add_child(close)
+
+func _biome_mode_text() -> String:
+	return "MODE:  LOCKED" if GameState.skin_locked else "MODE:  SHUFFLE"
+
+func _refresh_biome_mode() -> void:
+	biome_mode_btn.text = _biome_mode_text()
+	if GameState.skin_locked:
+		var idx : int = GameState.picked_skin if GameState.picked_skin >= 0 else 0
+		biome_hint.text = "Staying on " + SKIN_NAMES[idx % SKIN_NAMES.size()] + " every game"
+	else:
+		biome_hint.text = "Rotating your unlocked biomes as you clear rows"
+
+# Rebuilt on open / mode-toggle / selection so highlights stay correct
+func _populate_biomes() -> void:
+	for child in biome_rows.get_children():
+		child.queue_free()
+	biome_swatches.clear()
+	var current := _menu_skin()
+	for tier in BIOME_TIERS:
+		var header := Label.new()
+		header.text = tier["name"]
+		header.add_theme_font_size_override("font_size", 16)
+		header.add_theme_color_override("font_color", tier["color"])
+		header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		biome_rows.add_child(header)
+
+		var grid := GridContainer.new()
+		grid.columns = 3
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.mouse_filter = Control.MOUSE_FILTER_PASS
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
+		biome_rows.add_child(grid)
+		for idx in tier["skins"]:
+			grid.add_child(_make_biome_card(int(idx), current))
+
+func _make_biome_card(idx: int, current: int) -> PanelContainer:
+	var unlocked := GameState.is_skin_unlocked(idx)
+	var locked   := not unlocked
+	var selected := unlocked and idx == current
+
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(102, 0)
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(12)
+	sb.content_margin_left = 6; sb.content_margin_right = 6
+	sb.content_margin_top = 6;  sb.content_margin_bottom = 8
+	if selected:
+		sb.bg_color = Color(0.95, 0.78, 0.20, 0.16)
+		sb.set_border_width_all(2)
+		sb.border_color = Color(0.98, 0.82, 0.30)
+	elif locked:
+		# Sunken dark look so locked cards read as "off" (no light edge)
+		sb.bg_color = Color(0.0, 0.0, 0.0, 0.25)
+	else:
+		sb.bg_color = Color(1, 1, 1, 0.06)
+	card.add_theme_stylebox_override("panel", sb)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 3)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(col)
+
+	# Live skin preview
+	var swatch := Control.new()
+	swatch.custom_minimum_size = Vector2(90, 44)
+	swatch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sidx := idx
+	var slocked := locked
+	var scol : Color = COLORS[idx % COLORS.size()]
+	swatch.draw.connect(func():
+		var sz := swatch.size
+		if slocked:
+			# Flat dark plate + padlock — no skin pixels, so no stray light edges
+			BlockSkins.rr_fill(swatch, Rect2(1.0, 1.0, sz.x - 2.0, sz.y - 2.0), 6.0, Color(0.10, 0.10, 0.14))
+			_draw_padlock(swatch, sz * 0.5, 20.0)
+		else:
+			var cs : float = sz.y
+			var n := maxi(1, int(sz.x / cs))
+			var off := (sz.x - cs * float(n)) * 0.5
+			for k in n:
+				BlockSkins.paint(swatch, sidx,
+					Rect2(off + float(k) * cs + 1.0, 0.0, cs - 2.0, cs - 2.0),
+					scol, 11 + k * 7))
+	col.add_child(swatch)
+	biome_swatches.append(swatch)
+
+	var name_lbl := Label.new()
+	name_lbl.text = SKIN_NAMES[idx]
+	name_lbl.add_theme_font_size_override("font_size", 13)
+	name_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.45) if locked else Color(1, 1, 1, 0.92))
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(name_lbl)
+
+	var status := Label.new()
+	status.add_theme_font_size_override("font_size", 10)
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if not unlocked:
+		var hint := GameState.skin_unlock_hint(idx)
+		status.text = hint if hint != "" else "LOCKED"
+		status.add_theme_color_override("font_color", Color(0.95, 0.75, 0.45, 0.85))
+	elif selected:
+		status.text = "IN USE"
+		status.add_theme_color_override("font_color", Color(0.98, 0.82, 0.30))
+	else:
+		status.text = "TAP TO USE"
+		status.add_theme_color_override("font_color", Color(0.55, 0.85, 0.70, 0.8))
+	col.add_child(status)
+
+	var tap_idx := idx
+	card.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			if GameState.is_skin_unlocked(tap_idx):
+				GameState.select_skin(tap_idx)
+				Sfx.play_click()
+				_refresh_biome_mode()
+				_populate_biomes()
+			else:
+				Sfx.play_tick())
+	return card
+
+func _open_biomes() -> void:
+	_refresh_biome_mode()
+	_populate_biomes()
+	biome_box.visible = true
+	biome_box.scale = Vector2(0.85, 0.85)
+	biome_box.pivot_offset = Vector2(185, 300)
+	var t := create_tween()
+	t.tween_property(biome_box, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+# A small padlock — the universal "locked" mark (no font glyph needed)
+func _draw_padlock(ci: CanvasItem, c: Vector2, h: float) -> void:
+	var col  := Color(0.96, 0.97, 1.0, 0.96)
+	var dark := Color(0.08, 0.08, 0.14, 0.92)
+	var bw := h * 0.92
+	var bh := h * 0.60
+	var body := Rect2(c.x - bw * 0.5, c.y - bh * 0.10, bw, bh)
+	ci.draw_arc(Vector2(c.x, body.position.y + 1.0), bw * 0.30, PI, TAU, 18, col, maxf(h * 0.11, 2.0))
+	BlockSkins.rr_fill(ci, body, h * 0.14, col)
+	ci.draw_circle(Vector2(c.x, body.position.y + bh * 0.45), h * 0.11, dark)
+
+# Padlock badge pinned to the right edge of a (locked) button
+func _add_lock_badge(b: Button) -> void:
+	var badge := Control.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.position = Vector2(b.size.x - 40.0, b.size.y * 0.5 - 12.0)
+	badge.custom_minimum_size = Vector2(24, 24)
+	b.add_child(badge)
+	badge.draw.connect(func(): _draw_padlock(badge, Vector2(12, 12), 22.0))
+	badge.queue_redraw()
+
+# Denied feedback: a quick horizontal wobble + the invalid blip
+func _deny_button(b: Button) -> void:
+	Sfx.play_invalid()
+	var ox := b.position.x
+	var t := create_tween()
+	t.tween_property(b, "position:x", ox - 7.0, 0.05).set_trans(Tween.TRANS_SINE)
+	t.tween_property(b, "position:x", ox + 7.0, 0.05).set_trans(Tween.TRANS_SINE)
+	t.tween_property(b, "position:x", ox, 0.06).set_trans(Tween.TRANS_SINE)
+
 # ── Buttons ───────────────────────────────────────────────────────────────────
 func _make_chunky_button(label_text: String, fill: Color, font_size: int = 24) -> Button:
 	var b := Button.new()
@@ -838,9 +1086,27 @@ func _build_buttons() -> void:
 		_open_achievements())
 	fade_in.append(ach)
 
+	var biomes_ok := GameState.get_level() >= BIOMES_UNLOCK_LEVEL
+	var biomes := _make_chunky_button(
+		"BIOMES" if biomes_ok else "BIOMES   LV " + str(BIOMES_UNLOCK_LEVEL),
+		Color(0.30, 0.80, 0.55) if biomes_ok else Color(0.34, 0.34, 0.42), 22)
+	biomes.size = Vector2(280, 58)
+	biomes.position = Vector2(67, 660 if has_run else 598)
+	biomes.pivot_offset = biomes.size * 0.5
+	ui.add_child(biomes)
+	if biomes_ok:
+		biomes.pressed.connect(func():
+			Sfx.play_click()
+			_open_biomes())
+	else:
+		# Locked: padlock badge + a denied wobble instead of opening
+		_add_lock_badge(biomes)
+		biomes.pressed.connect(_deny_button.bind(biomes))
+	fade_in.append(biomes)
+
 	var settings := _make_chunky_button("SETTINGS", Color(0.20, 0.75, 0.95), 22)
 	settings.size = Vector2(280, 58)
-	settings.position = Vector2(67, 660 if has_run else 598)
+	settings.position = Vector2(67, 732 if has_run else 670)
 	settings.pivot_offset = settings.size * 0.5
 	ui.add_child(settings)
 	settings.pressed.connect(func():
