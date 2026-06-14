@@ -126,7 +126,7 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		23: _matrix(ci, r, col, s, rad, seed_v)
 		24: _hologram(ci, r, col, s, rad, seed_v)
 		25: _prism(ci, r, col, s, rad, seed_v, pr)
-		26: _stained(ci, r, col, s, rad, seed_v)
+		26: _stained(ci, r, col, s, rad, seed_v, pr)
 		27: _synthwave(ci, r, col, s, rad, seed_v)
 		28: _autumn(ci, r, col, s, rad, seed_v, pr)
 		29: _warp(ci, r, col, s, rad, seed_v)
@@ -1338,55 +1338,47 @@ static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	ci.draw_circle(r.position + r.size * Vector2(0.72, 0.30), s * 0.03, Color(1, 1, 1, 0.75))
 	rr_outline(ci, r, rad, Color(1, 1, 1, 0.45), 1.5)
 
-# Where a ray from `c` at angle `ang` meets the edge of `rect`
-static func _ray_to_rect(c: Vector2, ang: float, rect: Rect2) -> Vector2:
-	var d := Vector2(cos(ang), sin(ang))
-	var tt := 1.0e20
-	if d.x > 0.0001:
-		tt = minf(tt, (rect.end.x - c.x) / d.x)
-	elif d.x < -0.0001:
-		tt = minf(tt, (rect.position.x - c.x) / d.x)
-	if d.y > 0.0001:
-		tt = minf(tt, (rect.end.y - c.y) / d.y)
-	elif d.y < -0.0001:
-		tt = minf(tt, (rect.position.y - c.y) / d.y)
-	return c + d * tt
-
-# ── 26 STAINED (animated: a rose/cathedral window — radial jewel panes in lead) ─
-# Eight jewel wedges fan out from a glowing centre medallion, divided by dark
-# lead came; a soft light shimmer travels around the panes. Self-contained.
-static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
+# ── 26 STAINED (animated: one continuous leaded diamond window across the board) ─
+# Jewel diamonds tiled in pr (pattern) space with dark lead came between them, so
+# neighbouring blocks form a single cathedral window. A band of sunlight drifts
+# diagonally across, brightening the glass it passes. Each diamond a varied hue.
+static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
 	var t := Time.get_ticks_msec() * 0.001
-	var c := r.get_center()
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came (shows in the gaps)
-	var inner := r.grow(-s * 0.07)
-	var n := 8
-	var rot := float(seed_v % 8) * 0.12   # vary the pinwheel per block
-	var lit := int(t * 1.4 + float(seed_v)) % n   # which pane catches the light now
-	var rim := PackedVector2Array()
-	for i in n:
-		rim.append(_ray_to_rect(c, float(i) / float(n) * TAU - PI * 0.5 + rot, inner))
-	for i in n:
-		var p0 : Vector2 = rim[i]
-		var p1 : Vector2 = rim[(i + 1) % n]
-		var jhue : float = fmod(col.h + float(i) * 0.09 + float(seed_v % 5) * 0.03, 1.0)
-		var jewel := Color.from_hsv(jhue, 0.82, 0.92)
-		if i == lit:
-			jewel = jewel.lightened(0.30)
-		var cen := (c + p0 + p1) / 3.0
-		var tri := PackedVector2Array([c.lerp(cen, 0.10), p0.lerp(cen, 0.07), p1.lerp(cen, 0.07)])
-		draw_poly_safe(ci, tri, jewel)
-		# glass bevel catch along one came edge
-		ci.draw_line(c.lerp(cen, 0.10), p0.lerp(cen, 0.07), jewel.lightened(0.35), 1.0)
-	# Centre medallion: lead ring + jewel + a glassy highlight
-	var med := Color.from_hsv(fmod(col.h + 0.5, 1.0), 0.80, 1.0)
-	ci.draw_circle(c, s * 0.14, Color(0.05, 0.04, 0.07))
-	ci.draw_circle(c, s * 0.105, med)
-	ci.draw_circle(c - Vector2(s * 0.03, s * 0.03), s * 0.04, med.lightened(0.45))
-	var mp := 0.5 + 0.5 * sin(t * 2.0 + float(seed_v))
-	ci.draw_arc(c, s * 0.125, 0, TAU, 24, Color(1, 1, 1, 0.15 + 0.15 * mp), 1.0, true)
-	# Frame
+	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came shows in the gaps
+	var inner := r.grow(-s * 0.04)
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	# Diamonds sit on grid points where (i+j) is even — that set tiles the plane.
+	var g := ps * 0.38           # diamond half-diagonal
+	var gg := g - ps * 0.045     # inset for the lead gap
+	var i0 := int(floor(pr.position.x / g)) - 1
+	var i1 := int(ceil(pr.end.x / g)) + 1
+	var j0 := int(floor(pr.position.y / g)) - 1
+	var j1 := int(ceil(pr.end.y / g)) + 1
+	for i in range(i0, i1 + 1):
+		for j in range(j0, j1 + 1):
+			if (i + j) % 2 != 0:
+				continue
+			var cx : float = float(i) * g + delta.x
+			var cy : float = float(j) * g + delta.y
+			var dia := PackedVector2Array([
+				Vector2(cx, cy - gg), Vector2(cx + gg, cy),
+				Vector2(cx, cy + gg), Vector2(cx - gg, cy)])
+			var clipped := clip_poly_to_rect(dia, inner)
+			if clipped.size() < 3:
+				continue
+			var hsh := absi((i * 73856093) ^ (j * 19349663))
+			var jhue : float = fmod(col.h + float(hsh % 1000) / 1000.0, 1.0)
+			# Drifting sunlight band brightens diamonds as it sweeps across
+			var wave : float = 0.5 + 0.5 * sin((cx + cy) / (ps * 2.6) - t * 0.7)
+			var jewel := Color.from_hsv(jhue, 0.86 - wave * 0.12, 0.72 + wave * 0.26)
+			draw_poly_safe(ci, clipped, jewel)
+			# Glass bevel: bright top-left edges, shaded bottom-right
+			ci.draw_line(Vector2(cx, cy - gg), Vector2(cx - gg, cy), jewel.lightened(0.40), 1.0)
+			ci.draw_line(Vector2(cx + gg, cy), Vector2(cx, cy + gg), jewel.darkened(0.30), 1.0)
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
