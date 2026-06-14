@@ -1052,7 +1052,7 @@ func _build_skin_picker() -> void:
 	psb.content_margin_left = 18; psb.content_margin_right = 18
 	psb.content_margin_top = 16;  psb.content_margin_bottom = 20
 	skin_box.add_theme_stylebox_override("panel", psb)
-	skin_box.position = Vector2(37, 330)
+	skin_box.position = Vector2(37, 250)
 	skin_box.custom_minimum_size = Vector2(340, 0)
 	skin_box.visible = false
 	ui.add_child(skin_box)
@@ -1075,11 +1075,18 @@ func _build_skin_picker() -> void:
 	skin_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(skin_label)
 
+	# Scrollable so the (now 30+) skins all fit on screen
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(304, 396)
+	vbox.add_child(scroll)
+
 	var grid_c := GridContainer.new()
 	grid_c.columns = 3
+	grid_c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid_c.add_theme_constant_override("h_separation", 8)
 	grid_c.add_theme_constant_override("v_separation", 8)
-	vbox.add_child(grid_c)
+	scroll.add_child(grid_c)
 
 	var auto_btn := _make_chunky_button("AUTO", Color(0.20, 0.85, 0.45), 13)
 	auto_btn.custom_minimum_size = Vector2(96, 40)
