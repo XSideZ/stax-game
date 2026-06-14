@@ -1338,44 +1338,55 @@ static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	ci.draw_circle(r.position + r.size * Vector2(0.72, 0.30), s * 0.03, Color(1, 1, 1, 0.75))
 	rr_outline(ci, r, rad, Color(1, 1, 1, 0.45), 1.5)
 
-# ── 26 STAINED (animated: leaded jewel-glass mosaic with drifting sunlight) ───
+# Where a ray from `c` at angle `ang` meets the edge of `rect`
+static func _ray_to_rect(c: Vector2, ang: float, rect: Rect2) -> Vector2:
+	var d := Vector2(cos(ang), sin(ang))
+	var tt := 1.0e20
+	if d.x > 0.0001:
+		tt = minf(tt, (rect.end.x - c.x) / d.x)
+	elif d.x < -0.0001:
+		tt = minf(tt, (rect.position.x - c.x) / d.x)
+	if d.y > 0.0001:
+		tt = minf(tt, (rect.end.y - c.y) / d.y)
+	elif d.y < -0.0001:
+		tt = minf(tt, (rect.position.y - c.y) / d.y)
+	return c + d * tt
+
+# ── 26 STAINED (animated: a rose/cathedral window — radial jewel panes in lead) ─
+# Eight jewel wedges fan out from a glowing centre medallion, divided by dark
+# lead came; a soft light shimmer travels around the panes. Self-contained.
 static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
 	var t := Time.get_ticks_msec() * 0.001
+	var c := r.get_center()
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came
-	var inner := r.grow(-s * 0.075)
-	var h := absi(seed_v)
-	var segs : Array = []
-	match h % 3:
-		0:
-			var hw := inner.size.x * 0.5
-			var hh := inner.size.y * 0.5
-			segs = [Rect2(inner.position, Vector2(hw, hh)),
-				Rect2(inner.position + Vector2(hw, 0), Vector2(hw, hh)),
-				Rect2(inner.position + Vector2(0, hh), Vector2(hw, hh)),
-				Rect2(inner.position + Vector2(hw, hh), Vector2(hw, hh))]
-		1:
-			var bh := inner.size.y / 3.0
-			segs = [Rect2(inner.position, Vector2(inner.size.x, bh)),
-				Rect2(inner.position + Vector2(0, bh), Vector2(inner.size.x, bh)),
-				Rect2(inner.position + Vector2(0, bh * 2.0), Vector2(inner.size.x, bh))]
-		_:
-			var bw := inner.size.x / 3.0
-			segs = [Rect2(inner.position, Vector2(bw, inner.size.y)),
-				Rect2(inner.position + Vector2(bw, 0), Vector2(bw, inner.size.y)),
-				Rect2(inner.position + Vector2(bw * 2.0, 0), Vector2(bw, inner.size.y))]
-	for i in segs.size():
-		var seg : Rect2 = segs[i]
-		var g := seg.grow(-s * 0.016)
-		if g.size.x < 3.0 or g.size.y < 3.0:
-			continue
-		var jhue : float = fmod(col.h + float(i) * 0.07 + float(h % 5) * 0.02, 1.0)
-		var jewel := Color.from_hsv(jhue, 0.85, 0.95)
-		rr_grad(ci, g, rad * 0.35, jewel.lightened(0.22), jewel.darkened(0.18))
-		ci.draw_circle(g.position + g.size * Vector2(0.3, 0.28), minf(g.size.x, g.size.y) * 0.14, Color(1, 1, 1, 0.20))
-	# Drifting sunlight bloom catching the glass
-	var bx : float = r.position.x + r.size.x * (0.25 + 0.5 * (sin(t * 0.4 + float(seed_v)) * 0.5 + 0.5))
-	ci.draw_circle(Vector2(bx, r.position.y + r.size.y * 0.42), s * 0.26, Color(1.0, 0.97, 0.85, 0.10))
+	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came (shows in the gaps)
+	var inner := r.grow(-s * 0.07)
+	var n := 8
+	var rot := float(seed_v % 8) * 0.12   # vary the pinwheel per block
+	var lit := int(t * 1.4 + float(seed_v)) % n   # which pane catches the light now
+	var rim := PackedVector2Array()
+	for i in n:
+		rim.append(_ray_to_rect(c, float(i) / float(n) * TAU - PI * 0.5 + rot, inner))
+	for i in n:
+		var p0 : Vector2 = rim[i]
+		var p1 : Vector2 = rim[(i + 1) % n]
+		var jhue : float = fmod(col.h + float(i) * 0.09 + float(seed_v % 5) * 0.03, 1.0)
+		var jewel := Color.from_hsv(jhue, 0.82, 0.92)
+		if i == lit:
+			jewel = jewel.lightened(0.30)
+		var cen := (c + p0 + p1) / 3.0
+		var tri := PackedVector2Array([c.lerp(cen, 0.10), p0.lerp(cen, 0.07), p1.lerp(cen, 0.07)])
+		draw_poly_safe(ci, tri, jewel)
+		# glass bevel catch along one came edge
+		ci.draw_line(c.lerp(cen, 0.10), p0.lerp(cen, 0.07), jewel.lightened(0.35), 1.0)
+	# Centre medallion: lead ring + jewel + a glassy highlight
+	var med := Color.from_hsv(fmod(col.h + 0.5, 1.0), 0.80, 1.0)
+	ci.draw_circle(c, s * 0.14, Color(0.05, 0.04, 0.07))
+	ci.draw_circle(c, s * 0.105, med)
+	ci.draw_circle(c - Vector2(s * 0.03, s * 0.03), s * 0.04, med.lightened(0.45))
+	var mp := 0.5 + 0.5 * sin(t * 2.0 + float(seed_v))
+	ci.draw_arc(c, s * 0.125, 0, TAU, 24, Color(1, 1, 1, 0.15 + 0.15 * mp), 1.0, true)
+	# Frame
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
