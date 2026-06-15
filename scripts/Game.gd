@@ -106,6 +106,12 @@ const DRAG_LIFT := 70.0
 # exactly where it lands, so over-reach stays visible before releasing.
 const SNAP_REACH := 4
 
+# Hysteresis (in cells) for the snap anchor: once locked to a cell, the piece HOLDS
+# there until the finger pushes this far past the cell edge — stops it flipping on a
+# 1-2px nudge across a boundary. Higher = stickier lock.
+const SNAP_HYST := 0.34
+var snap_anchor := Vector2i(-999, -999)   # last locked finger-cell (drag hysteresis)
+
 # ── Power meter ───────────────────────────────────────────────────────────────
 # One charge bar fills from clears. Spend it (tap the orb) on the best ability
 # it can afford: ¼ Bomb, ½ Laser, FULL Gravity Slam (the ultimate).
@@ -729,6 +735,7 @@ func _start_drag(pos: Vector2) -> void:
 		dragging_slot = slot
 		drag_pos      = pos
 		drag_pop_t    = 1.0
+		snap_anchor   = Vector2i(-999, -999)   # fresh hysteresis lock for this piece
 		last_hover_valid = false   # so the first valid hover this drag ticks
 		Sfx.play_pickup()
 		queue_redraw()
@@ -1070,7 +1077,7 @@ func _get_snap(pos: Vector2, shape: Array) -> Vector2i:
 		if (cell[0] as int) > max_c: max_c = cell[0]
 		if (cell[1] as int) < min_r: min_r = cell[1]
 		if (cell[1] as int) > max_r: max_r = cell[1]
-	var gc := _screen_to_grid(pos)
+	var gc := _anchor_cell(pos)
 	return Vector2i(
 		gc.x - roundi((min_c + max_c) / 2.0),
 		gc.y - roundi((min_r + max_r) / 2.0)
@@ -1092,6 +1099,24 @@ func _best_snap(pos: Vector2, shape: Array) -> Vector2i:
 					best_d = d
 					best = Vector2i(base.x + dc, base.y + dr)
 	return best
+
+# Which grid cell the (lifted) finger maps to, WITH hysteresis so the snap LOCKS:
+# once on a cell it holds until the finger pushes SNAP_HYST past the cell edge,
+# instead of flipping the instant you cross a boundary (the 1-2px swap Jay saw).
+func _anchor_cell(pos: Vector2) -> Vector2i:
+	var gx := (pos.x - GRID_X) / GRID_STEP
+	var gy := (pos.y - GRID_Y) / GRID_STEP
+	if snap_anchor.x < -900:
+		snap_anchor = Vector2i(floori(gx), floori(gy))
+		return snap_anchor
+	var ax := snap_anchor.x
+	var ay := snap_anchor.y
+	if gx >= float(ax) + 1.0 + SNAP_HYST or gx < float(ax) - SNAP_HYST:
+		ax = floori(gx)
+	if gy >= float(ay) + 1.0 + SNAP_HYST or gy < float(ay) - SNAP_HYST:
+		ay = floori(gy)
+	snap_anchor = Vector2i(ax, ay)
+	return snap_anchor
 
 func _screen_to_grid(pos: Vector2) -> Vector2i:
 	return Vector2i(
