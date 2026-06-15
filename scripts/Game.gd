@@ -855,9 +855,18 @@ func _end_drag(pos: Vector2) -> void:
 	queue_redraw()
 
 # Light haptic tap — no-ops on desktop and respects the settings toggle
+var _last_buzz_ms : int = 0
 func _buzz(ms: int) -> void:
-	if GameState.haptics_on:
-		Input.vibrate_handheld(ms)
+	if not GameState.haptics_on:
+		return
+	# Throttle + clamp: rapid events (e.g. ghost-hover jitter at a snap/tray edge)
+	# could otherwise stack handheld vibrations into a continuous buzz that only
+	# stops on an app restart. One short pulse at a time, capped length.
+	var now := Time.get_ticks_msec()
+	if now - _last_buzz_ms < 50:
+		return
+	_last_buzz_ms = now
+	Input.vibrate_handheld(clampi(ms, 1, 160))
 
 # ── Power abilities ───────────────────────────────────────────────────────────
 func _fire_power() -> void:

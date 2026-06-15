@@ -155,14 +155,14 @@ func next_auto_theme(current: int) -> int:
 	return nxt
 
 # ── Player profile / XP ───────────────────────────────────────────────────────
-# Level curve: cost(level→level+1) = 45 + 0.5·level². Total to hit MAX_LEVEL
-# is ~168k XP. Run XP is SKILL-based (score only, no per-move grind): score/250,
-# so a strong 15k game pays ~60 and a great 100k run ~400. Hard achievements
+# Level curve: cost(level→level+1) = 60 + 0.75·level². Total to hit MAX_LEVEL
+# is ~252k XP. Run XP is SKILL-based (score only, no per-move grind): score/400,
+# so a strong 15k game pays ~37 and a great 100k run ~250. Hard achievements
 # stay the big chunks — levelling is gated by skill, not time spent.
 const MAX_LEVEL := 100
 # Bump this to force a one-time progress wipe for everyone on the next update:
 # on load, a save with an older epoch is reset to a fresh level 1 (settings kept).
-const RESET_EPOCH := 1
+const RESET_EPOCH := 2
 var save_epoch : int = 0
 var player_name  : String = ""
 var player_xp    : int = 0
@@ -197,7 +197,7 @@ func add_power_used() -> void:
 # are "<group>_<tier_index>".
 const ACH_GROUPS : Array = [
 	{"id": "games",  "name": "Dedicated",      "desc": "Play %s games",                  "tiers": [[1, 50], [10, 200], [100, 600]]},
-	{"id": "score",  "name": "High Scorer",    "desc": "Score %s in one run",            "tiers": [[1000, 75], [10000, 300], [100000, 900]]},
+	{"id": "score",  "name": "High Scorer",    "desc": "Score %s in one run",            "tiers": [[10000, 75], [100000, 300], [500000, 900]]},
 	{"id": "lines",  "name": "Line Clearer",   "desc": "Clear %s lines in total",        "tiers": [[50, 50], [500, 150], [2500, 350]]},
 	{"id": "streak", "name": "On Fire",        "desc": "Reach a streak of %s clears",    "tiers": [[3, 50], [5, 150], [8, 300]]},
 	{"id": "multi",  "name": "Combo King",     "desc": "Clear %s lines in one move",     "tiers": [[2, 75], [4, 300], [5, 700]]},
@@ -295,7 +295,7 @@ func check_unlocks(grant_xp: bool = true) -> Array:
 	return all_fresh
 
 static func xp_cost(level: int) -> int:
-	return 45 + int(0.5 * float(level * level))
+	return 60 + int(0.75 * float(level * level))
 
 static func level_for_xp(xp: int) -> int:
 	var lvl := 1
@@ -338,7 +338,7 @@ func finish_run(moves: int, final_score: int, run_lines: int = 0,
 	stat_run_lines     = maxi(stat_run_lines, run_lines)
 	last_xp_before = player_xp
 	# Skill-based run XP: score only (no per-move grind reward), heavily scaled down.
-	last_xp_gain = int(final_score / 250)
+	last_xp_gain = int(final_score / 400)
 	player_xp += last_xp_gain
 	pending_toasts = check_unlocks()
 	pending_toasts.append_array(check_skin_unlocks())
@@ -526,8 +526,9 @@ func clear_run() -> void:
 		if d != null:
 			d.remove("stax_run.dat")
 
-# Wipe progression to a fresh level 1, keeping only settings + player name.
+# Wipe progression to a fresh level 1 and re-prompt for name. Keeps only settings.
 func _reset_progress() -> void:
+	player_name = ""
 	best_score = 0
 	scores = []
 	theme_idx = 0

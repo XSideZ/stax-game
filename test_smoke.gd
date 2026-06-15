@@ -175,7 +175,7 @@ func _initialize() -> void:
 	var total_xp := 0
 	for lvl in range(1, 100):
 		total_xp += gs.xp_cost(lvl)
-	if total_xp < 150000 or total_xp > 185000:
+	if total_xp < 230000 or total_xp > 285000:
 		print("FAIL xp curve total: ", total_xp); fails += 1
 	gs.player_xp = 0
 	if gs.get_level() != 1:
@@ -185,8 +185,8 @@ func _initialize() -> void:
 		print("FAIL max level: ", gs.get_level()); fails += 1
 	if gs.xp_progress() != [0, 0]:
 		print("FAIL max level progress"); fails += 1
-	gs.player_xp = 50   # past level 1 cost (45), 5 into level 2
-	if gs.get_level() != 2 or gs.xp_progress()[0] != 5:
+	gs.player_xp = 70   # past level 1 cost (60), 10 into level 2
+	if gs.get_level() != 2 or gs.xp_progress()[0] != 10:
 		print("FAIL level walk: ", gs.get_level(), " ", gs.xp_progress()); fails += 1
 
 	# Tiered achievements: unlock grants XP exactly once, info formats right.
@@ -197,7 +197,7 @@ func _initialize() -> void:
 		backup = FileAccess.get_file_as_bytes("user://stax_save.dat")
 	gs.player_xp = 0
 	gs.unlocked = {}
-	gs.best_score = 1500   # past score tier I (1000), short of tier II (10000)
+	gs.best_score = 15000   # past score tier I (10000), short of tier II (100000)
 	var fresh : Array = gs.check_unlocks()
 	if not fresh.has("score_0") or fresh.has("score_1"):
 		print("FAIL tiered unlock: ", fresh); fails += 1
@@ -208,7 +208,7 @@ func _initialize() -> void:
 	var info : Dictionary = gs.ach_info("score_0")
 	if info.get("name", "") != "High Scorer I" or info.get("xp", 0) != 75:
 		print("FAIL ach_info: ", info); fails += 1
-	gs.best_score = 12000
+	gs.best_score = 120000
 	if not gs.check_unlocks().has("score_1"):
 		print("FAIL next tier unlock"); fails += 1
 	if had_save:
