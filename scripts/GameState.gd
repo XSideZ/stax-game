@@ -155,9 +155,10 @@ func next_auto_theme(current: int) -> int:
 	return nxt
 
 # ── Player profile / XP ───────────────────────────────────────────────────────
-# Level curve: cost(level→level+1) = 20 + 0.28·level². Total to hit MAX_LEVEL
-# is ~92k XP; an average run (≈40 moves, ≈800 pts) pays ~80 XP, so level 100
-# lands around 100 hours of normal play.
+# Level curve: cost(level→level+1) = 45 + 0.5·level². Total to hit MAX_LEVEL
+# is ~168k XP. Run XP is SKILL-based (score only, no per-move grind): score/250,
+# so a strong 15k game pays ~60 and a great 100k run ~400. Hard achievements
+# stay the big chunks — levelling is gated by skill, not time spent.
 const MAX_LEVEL := 100
 var player_name  : String = ""
 var player_xp    : int = 0
@@ -290,7 +291,7 @@ func check_unlocks(grant_xp: bool = true) -> Array:
 	return all_fresh
 
 static func xp_cost(level: int) -> int:
-	return 20 + int(0.28 * float(level * level))
+	return 45 + int(0.5 * float(level * level))
 
 static func level_for_xp(xp: int) -> int:
 	var lvl := 1
@@ -332,7 +333,8 @@ func finish_run(moves: int, final_score: int, run_lines: int = 0,
 	stat_best_streak   = maxi(stat_best_streak, run_streak)
 	stat_run_lines     = maxi(stat_run_lines, run_lines)
 	last_xp_before = player_xp
-	last_xp_gain = moves + final_score / 20
+	# Skill-based run XP: score only (no per-move grind reward), heavily scaled down.
+	last_xp_gain = int(final_score / 250)
 	player_xp += last_xp_gain
 	pending_toasts = check_unlocks()
 	pending_toasts.append_array(check_skin_unlocks())

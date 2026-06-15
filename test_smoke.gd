@@ -171,12 +171,11 @@ func _initialize() -> void:
 	if gs.has_run_save():
 		print("FAIL clear_run"); fails += 1
 
-	# XP curve: total for level 100 should land near 100 hours of average play
-	# (~80 XP/run, ~12 runs/hour => target roughly 85k-110k total XP)
+	# XP curve total to level 100 (skill-based income + steeper curve ~168k)
 	var total_xp := 0
 	for lvl in range(1, 100):
 		total_xp += gs.xp_cost(lvl)
-	if total_xp < 80000 or total_xp > 115000:
+	if total_xp < 150000 or total_xp > 185000:
 		print("FAIL xp curve total: ", total_xp); fails += 1
 	gs.player_xp = 0
 	if gs.get_level() != 1:
@@ -186,7 +185,7 @@ func _initialize() -> void:
 		print("FAIL max level: ", gs.get_level()); fails += 1
 	if gs.xp_progress() != [0, 0]:
 		print("FAIL max level progress"); fails += 1
-	gs.player_xp = 25   # past level 1 cost (20), 5 into level 2
+	gs.player_xp = 50   # past level 1 cost (45), 5 into level 2
 	if gs.get_level() != 2 or gs.xp_progress()[0] != 5:
 		print("FAIL level walk: ", gs.get_level(), " ", gs.xp_progress()); fails += 1
 
