@@ -96,8 +96,7 @@ func _ready() -> void:
 		retry_button.position.y -= 82.0
 		menu_button.position.y  -= 82.0
 
-	# Interstitial every 2nd game over — give the screen a beat to land first
-	get_tree().create_timer(1.2).timeout.connect(Ads.notify_game_over)
+	# Interstitials disabled — rewarded (revive) ads only.
 
 # ── Stats card: LINES / BEST STREAK / BOARD CLEARS as columns ────────────────
 func _card_style() -> StyleBoxFlat:

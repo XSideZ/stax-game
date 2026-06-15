@@ -12,6 +12,11 @@ var haptics_on : bool = true
 # One ad-revive per run
 var revive_used : bool = false
 
+# First-run tutorial: tutorial_active (runtime) launches Game straight into the
+# coached tutorial; tutorial_done (persisted) stops it ever replaying.
+var tutorial_active : bool = false
+var tutorial_done   : bool = false
+
 # Dev skin changer (main-menu picker, session-only): -1 = follow the theme
 var dev_skin_override : int = -1
 
@@ -550,6 +555,7 @@ func _reset_progress() -> void:
 	picked_skin = -1
 	skin_locked = false
 	dev_skin_override = -1
+	tutorial_done = false
 
 # ── Settings / meta persistence ───────────────────────────────────────────────
 func _save() -> void:
@@ -581,6 +587,7 @@ func _save() -> void:
 	f.store_var(picked_skin)
 	f.store_var(skin_locked)
 	f.store_var(save_epoch)
+	f.store_var(tutorial_done)
 	f.close()
 
 func _load() -> void:
@@ -638,6 +645,8 @@ func _load() -> void:
 		skin_locked = f.get_var()
 	if f.get_position() < f.get_length():
 		save_epoch = f.get_var()
+	if f.get_position() < f.get_length():
+		tutorial_done = f.get_var()
 	f.close()
 	# One-time global reset after the XP rework — anyone on an older epoch starts
 	# fresh at level 1 (settings + name kept).

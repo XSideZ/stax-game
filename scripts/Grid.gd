@@ -23,6 +23,11 @@ var preview_color := Color.TRANSPARENT
 
 var last_lines_cleared : int = 0
 
+# Animated skins (water/lava/galaxy…) repaint all 64 cells every frame, which is
+# the heaviest per-frame cost on mobile. Throttle that decorative shimmer to
+# ~30fps; gameplay redraws (place/clear/slam/preview) still fire immediately.
+var _anim_accum : float = 0.0
+
 # Clear pop animation: per-cell colour, cascade delay and burst particles
 const POP_DUR   := 0.38
 var clear_anim  : Array = []
@@ -112,10 +117,13 @@ func _process(delta: float) -> void:
 	if not preview_cells.is_empty():
 		needs_redraw = true
 
-	# Animated skins live-update every frame (full 60fps) — the per-frame cost is
-	# kept low in BlockSkins (convex fast-path + reused buffers) so it can hold it
+	# Animated skins live-update on a ~30fps budget (perf: 64 complex cell paints
+	# per frame is the main mobile cost; halving it is a big saving, barely visible)
 	if BlockSkins.ANIMATED.has(block_style):
-		needs_redraw = true
+		_anim_accum += delta
+		if _anim_accum >= 1.0 / 30.0:
+			_anim_accum = 0.0
+			needs_redraw = true
 
 	# Board frame: decay the clear-flare and push it + the biome hue to the shader.
 	# The border animates on the GPU, so nothing needs to redraw here.

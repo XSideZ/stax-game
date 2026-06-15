@@ -407,7 +407,15 @@ func _build_name_prompt() -> void:
 		Sfx.play_click()
 		dim.queue_free()
 		panel.queue_free()
-		_build_menu()   # menu intro plays now, on a clean screen
+		# Brand-new player → drop them straight into the coached tutorial game.
+		# Once it's been completed, naming just builds the menu as normal.
+		if not GameState.tutorial_done:
+			GameState.tutorial_active = true
+			GameState.has_save = false
+			GameState.clear_run()
+			get_tree().change_scene_to_file("res://scenes/Game.tscn")
+		else:
+			_build_menu()   # menu intro plays now, on a clean screen
 	go.pressed.connect(confirm)
 	input.text_submitted.connect(func(_t): confirm.call())
 	input.grab_focus()

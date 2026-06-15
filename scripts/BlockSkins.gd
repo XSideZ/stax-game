@@ -517,12 +517,16 @@ static func _grass(ci: CanvasItem, r: Rect2, _col: Color, s: float, rad: float, 
 # Flowers: varied colour + position, on many (not all) blocks — denser than the old
 # 1-in-7-at-a-fixed-spot version.
 static func _grass_flowers(ci: CanvasItem, r: Rect2, s: float, seed_v: int) -> void:
+	# Weighted toward PINK, with TURQUOISE accents (per Jay's request) — a few
+	# white/amber kept for variety
 	var fcols : Array = [
-		Color(1, 1, 1), Color(1.0, 0.74, 0.86), Color(1.0, 0.55, 0.74),
-		Color(0.80, 0.66, 1.0), Color(1.0, 0.82, 0.45),
+		Color(1.0, 0.55, 0.74), Color(1.0, 0.44, 0.70), Color(1.0, 0.70, 0.84),
+		Color(1.0, 0.60, 0.80), Color(1.0, 0.50, 0.76),     # pinks (weighted)
+		Color(0.26, 0.88, 0.82), Color(0.40, 0.93, 0.87),   # turquoise
+		Color(1, 1, 1), Color(1.0, 0.82, 0.45),             # white + amber
 	]
 	var count := 0
-	if seed_v % 5 < 2: count = 1          # ~40% of blocks get a flower
+	if seed_v % 5 < 3: count = 1          # ~60% of blocks get a flower
 	if seed_v % 5 == 0: count = 2          # ~20% get a second one
 	for f in count:
 		var sv := seed_v * (f + 1) * 41 + f * 17

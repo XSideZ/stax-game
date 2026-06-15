@@ -192,6 +192,25 @@ const GEAR_RECT := Rect2(360.0, 26.0, 42.0, 42.0)
 var menu_open  : bool = false
 var pause_menu : Control
 
+# First-run tutorial coach (null unless GameState.tutorial_active). While present
+# it suspends auto-save and forwards placement/power events to the coach.
+var tutorial : Node = null
+# Guided-placement lock: during the coached steps only this slot may be grabbed,
+# and it always lands on this cell (magnetised) so the player can't misplace it.
+var tut_lock_slot : int     = -1
+var tut_lock_cell : Vector2i = Vector2i.ZERO
+
+# Power rescue: when no piece fits but a charged ability could clear space, give
+# the player a few seconds + a prompt to fire it instead of instantly losing.
+const RESCUE_SECS := 4.5
+var rescue_active   : bool  = false
+var rescue_timer    : float = 0.0
+var _was_power_busy : bool  = false   # detect when a fired power finishes resolving
+
+# Idle background redraws throttle to ~30fps (perf: the parallax skins are the
+# heavy per-frame cost on mobile). Any gameplay action redraws at full 60fps.
+var _idle_redraw_accum : float = 0.0
+
 # Tray spawn bounce
 var tray_pop_t : float = 0.0
 
@@ -238,6 +257,9 @@ func _ready() -> void:
 		_spawn_pieces()
 	_refresh_best()
 	Sfx.update_music()
+	_add_dev_clear_button()
+	if GameState.tutorial_active:
+		_start_tutorial()
 
 # ── Orbs ──────────────────────────────────────────────────────────────────────
 func _init_orbs() -> void:
@@ -325,7 +347,29 @@ func _process(delta: float) -> void:
 			disp_score = float(score)
 		_set_score_text(int(round(disp_score)))
 
-	queue_redraw()
+	# When a fired power finishes, resolve survival (a spent power never kills you)
+	if _was_power_busy and not power_busy:
+		_resolve_after_power()
+	_was_power_busy = power_busy
+
+	# Rescue countdown — only while waiting for the player to act on the prompt
+	if rescue_active and not power_busy:
+		rescue_timer -= delta
+		if rescue_timer <= 0.0:
+			_game_over()
+
+	# Full-rate redraw during any motion; throttle the idle parallax to ~30fps
+	var busy : bool = shake_t > 0.0 or flash_t > 0.0 or power_pulse > 0.0 \
+		or theme_lerp < 1.0 or tray_pop_t > 0.0 or streak_lost_t > 0.0 \
+		or drag_pop_t > 0.0 or dragging_slot >= 0 or rescue_active \
+		or not effects.is_empty() or disp_score != float(score)
+	if busy:
+		queue_redraw()
+	else:
+		_idle_redraw_accum += delta
+		if _idle_redraw_accum >= 1.0 / 30.0:
+			_idle_redraw_accum = 0.0
+			queue_redraw()
 	drag_layer.queue_redraw()
 
 # ── Spawning ──────────────────────────────────────────────────────────────────
@@ -334,9 +378,12 @@ func _spawn_pieces() -> void:
 	placed        = [false, false, false]
 	dragging_slot = -1
 
-	# Slot 0 is gifted a board-clearing piece whenever one exists — for the WHOLE
-	# game, not just early — so board clears keep happening across long runs.
-	var forced_clear : Array = _pick_board_clear_shape()
+	# Slot 0 is gifted a board-clearing piece when one exists — but only some of the
+	# time once the run gets going. Early on it's near-guaranteed (keeps the fast
+	# board-clear loop); deep in a run it's rare, so survival gets real.
+	var forced_clear : Array = []
+	if randf() < lerpf(1.0, 0.18, _difficulty()):
+		forced_clear = _pick_board_clear_shape()
 
 	var picked_keys: Array = []
 	for _i in 3:
@@ -370,15 +417,25 @@ func _spawn_pieces() -> void:
 	grid.clear_ghost()
 	queue_redraw()
 	if not grid.can_any_fit(_shapes_array(), placed):
-		_game_over()
+		_try_game_over()
 
 func _progression() -> float:
 	return clampf((sets_given - 2) / 10.0, 0.0, 1.0)
 
+# Run difficulty 0..1. Stays 0 through the (already well-tuned) early game, then
+# ramps up over a long run so the generosity crutches fade and it gets genuinely
+# hard to survive deep into a run instead of feeling the same at 10k and 200k.
+const DIFF_START := 14.0   # sets before difficulty starts climbing (= early phase)
+const DIFF_LEN   := 60.0   # sets over which it climbs to max
+func _difficulty() -> float:
+	return clampf((float(sets_given) - DIFF_START) / DIFF_LEN, 0.0, 1.0)
+
 # Drain toward a board clear: early in the run, or when it's been too long since
-# the last one. Drives the small-clearing-piece bias that sets up board clears.
+# the last one. The drought threshold GROWS with difficulty so board-clear bailouts
+# get rarer the deeper you are — the board stays fuller and the pressure builds.
 func _wants_clear() -> bool:
-	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= CLEAR_DROUGHT
+	var drought : int = int(round(lerpf(float(CLEAR_DROUGHT), 13.0, _difficulty())))
+	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
 func _board_fill() -> float:
@@ -727,6 +784,9 @@ func _help_player_continue() -> void:
 func _input(event: InputEvent) -> void:
 	if menu_open:
 		return
+	# During a gated tutorial beat the coach's veil handles the tap to advance
+	if tutorial != null and tutorial.gated:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed: _start_drag(event.position)
 		else:             _end_drag(event.position)
@@ -753,6 +813,9 @@ func _start_drag(pos: Vector2) -> void:
 		_toggle_pause_menu()
 		return
 	var slot := _pos_to_slot(pos)
+	# Guided placement: only the highlighted piece can be picked up
+	if tut_lock_slot >= 0 and slot != tut_lock_slot:
+		return
 	if slot >= 0 and not placed[slot]:
 		dragging_slot = slot
 		drag_pos      = pos
@@ -769,6 +832,9 @@ func _end_drag(pos: Vector2) -> void:
 	var shape : Array    = pieces[dragging_slot].shape
 	var color : Color    = pieces[dragging_slot].color
 	var snap  : Vector2i = _best_snap(lifted, shape)
+	# Guided placement: drop anywhere on the board → lands on the one legal cell
+	if tut_lock_slot == dragging_slot:
+		snap = tut_lock_cell
 
 	if _drop_targets_board(pos) and grid.can_place(shape, snap.y, snap.x):
 		grid.place(shape, snap.y, snap.x, color, pieces[dragging_slot].get("pattern", 0))
@@ -816,6 +882,7 @@ func _end_drag(pos: Vector2) -> void:
 			Sfx.play_board_clear()
 			_buzz(90)
 			_show_board_clear_popup()
+			_trigger_board_clear_fx()
 
 		score += gained
 		GameState.submit_score(score)
@@ -843,9 +910,11 @@ func _end_drag(pos: Vector2) -> void:
 		if placed[0] and placed[1] and placed[2]:
 			_spawn_pieces()
 		elif not grid.can_any_fit(_shapes_array(), placed):
-			_game_over()
+			_try_game_over()
 
 		_save_run()
+		if tutorial != null:
+			tutorial.on_event("placed", lines)
 	elif _drop_targets_board(pos):
 		Sfx.play_invalid()
 		_buzz(25)
@@ -887,6 +956,8 @@ func _fire_power() -> void:
 	GameState.add_power_used()
 	for key in GameState.check_unlocks():
 		_show_achievement_toast(key)
+	if tutorial != null:
+		tutorial.on_event("power", 0)
 	queue_redraw()
 
 # Prefer a filled cell so the blast always feels like it hit something
@@ -992,6 +1063,9 @@ func _power_gravity() -> void:
 	# no gap — blocks re-settle flush against the wall.
 	grid.start_slam(dir)
 	await get_tree().create_timer(Grid.SLAM_DUR + 0.04).timeout
+	# Final impact: the re-settled layer slams flush into the wall — one more thud
+	shake_t = maxf(shake_t, 0.50)
+	_buzz(90)
 	var settled := grid.check_and_clear()
 	if settled > 0:
 		_award_power_clear(settled, grid.last_lines_cleared)
@@ -1094,6 +1168,9 @@ func _update_ghost() -> void:
 		return
 	var shape : Array    = pieces[dragging_slot].shape
 	var snap  : Vector2i = _best_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
+	# Guided placement magnetises the ghost to the single legal cell
+	if tut_lock_slot == dragging_slot:
+		snap = tut_lock_cell
 	if grid.can_place(shape, snap.y, snap.x):
 		grid.set_ghost(shape, snap.y, snap.x, pieces[dragging_slot].color)
 		# Light tick each time the shadow lands on a NEW valid spot
@@ -1320,6 +1397,29 @@ func _draw() -> void:
 
 	draw_set_transform(Vector2.ZERO)
 
+	# Power-rescue prompt sits on top of everything
+	if rescue_active:
+		_draw_rescue()
+
+# "No moves — use your power!" alert: a pulsing ring on the orb + a banner.
+func _draw_rescue() -> void:
+	var pulse := (sin(Time.get_ticks_msec() * 0.012) + 1.0) * 0.5
+	# Strong pulsing ring around the power orb to pull the eye to it
+	draw_arc(POWER_CENTER, POWER_R + 9.0 + pulse * 5.0, 0, TAU, 40,
+		Color(1.0, 0.85, 0.30, 0.55 + 0.40 * pulse), 3.5, true)
+	# Alert banner across the board
+	var panel := Rect2(47, 326, 320, 102)
+	_rr_fill(panel, 18.0, Color(0.12, 0.04, 0.06, 0.90))
+	_rr_outline(panel, 18.0, Color(1.0, 0.40, 0.35, 0.45 + 0.40 * pulse), 2.5)
+	var f := _icon_font
+	draw_string(f, Vector2(panel.position.x, 366), "NO MOVES LEFT!",
+		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 27, Color(1.0, 0.85, 0.40))
+	draw_string(f, Vector2(panel.position.x, 397), "Tap your POWER to survive",
+		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 18, Color(1, 1, 1, 0.88))
+	var secs : int = int(ceil(rescue_timer))
+	draw_string(f, Vector2(panel.position.x, 420), str(secs),
+		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 15, Color(1, 1, 1, 0.55))
+
 func _draw_bg_pattern() -> void:
 	match _visual_idx():
 		0:  # Pastel Sky — blue sky with drifting clouds and a soft sun
@@ -1431,7 +1531,7 @@ func _draw_bg_pattern() -> void:
 				var rot := pt * 0.6 + float(i) * 1.3
 				draw_set_transform(Vector2(px, py), rot)
 				draw_polygon(PackedVector2Array([Vector2(0, -5), Vector2(3.5, 0), Vector2(0, 5), Vector2(-3.5, 0)]),
-					PackedColorArray([Color(0.75, 1.0, 0.55, 0.09)]))
+					PackedColorArray([Color(1.0, 0.55, 0.80, 0.12) if i % 3 == 0 else (Color(0.32, 0.92, 0.86, 0.11) if i % 3 == 1 else Color(0.85, 1.0, 0.65, 0.09))]))
 				draw_set_transform(Vector2.ZERO)
 			for i in 28:
 				var gx2 : float = float(i) * 15.0 + float((i * 7) % 9)
@@ -2016,6 +2116,85 @@ func _draw_fx_layer() -> void:
 			"laser_charge": _fx_laser_charge(e, p)
 			"laser_fire":   _fx_laser_fire(e, p)
 			"gravity":      _fx_gravity(e, p)
+			"pixel_art":    _fx_pixel_art(e, p)
+
+# ── TEMP dev tool: button that simulates a board clear to test the clear FX ────
+func _add_dev_clear_button() -> void:
+	var b := Button.new()
+	b.text = "CLEAR"
+	b.position = Vector2(330, 90)
+	b.size = Vector2(80, 32)
+	b.add_theme_font_size_override("font_size", 13)
+	ui.add_child(b)
+	b.pressed.connect(_dev_test_board_clear)
+
+func _dev_test_board_clear() -> void:
+	Sfx.play_board_clear()
+	_show_board_clear_popup()
+	_trigger_board_clear_fx()
+
+# Board-clear flourish: the WHOLE board fills with a colourful pixel pattern made
+# of the CURRENT skin's own blocks (every skin gets it for free), held a beat,
+# then popped away — under 2s. Every pattern covers all 64 cells and uses as many
+# of the 6 palette colours as it can.
+const PIXEL_PATTERNS := 6
+
+# Colour index 0-5 for cell (r,c) under pattern `pat` — always a real colour, so
+# the board is always fully covered.
+func _pixel_color(pat: int, r: int, c: int) -> int:
+	match pat:
+		0: return (r + c) % 6                          # diagonal rainbow
+		1: return ((c - r) % 6 + 6) % 6                # anti-diagonal rainbow
+		2: return r % 6                                # horizontal bands
+		3: return c % 6                                # vertical bands
+		4: return (int(r / 2.0) + int(c / 2.0)) % 6    # 2x2 colour mosaic
+		5:
+			var rd : int = mini(absi(r - 3), absi(r - 4))
+			var cd : int = mini(absi(c - 3), absi(c - 4))
+			return (rd + cd) % 6                        # diamond rings from centre
+	return (r + c) % 6
+
+func _trigger_board_clear_fx() -> void:
+	effects.append({"type": "pixel_art", "t": 0.0, "dur": 1.2,
+		"pattern": randi() % PIXEL_PATTERNS, "seed": randi() % 100000})
+	fx_layer.queue_redraw()
+	# POP: a screen punch once the picture finishes blooming (no white flash)
+	await get_tree().create_timer(0.24).timeout
+	shake_t = maxf(shake_t, 0.30)
+	_buzz(55)
+
+# Back-ease-out with extra overshoot for a punchy pop
+func _back_out(x: float) -> float:
+	var c1 := 2.2
+	var c3 := c1 + 1.0
+	return 1.0 + c3 * pow(x - 1.0, 3.0) + c1 * pow(x - 1.0, 2.0)
+
+func _fx_pixel_art(e: Dictionary, p: float) -> void:
+	var pat : int = e["pattern"]
+	var base_seed : int = e["seed"]
+	for r in GRID_ROWS:
+		for c in GRID_COLS:
+			# Bloom out from the board centre, brief hold, then fade + pop away early
+			var dist : float = Vector2(float(c) - 3.5, float(r) - 3.5).length()
+			var s : float
+			var a : float = 1.0
+			if p < 0.42:
+				var lp : float = clampf((p - dist * 0.020) / 0.22, 0.0, 1.0)
+				s = _back_out(lp)
+			else:
+				var op : float = clampf((p - 0.42) / 0.58, 0.0, 1.0)
+				s = 1.0 - op * op
+				a = 1.0 - op            # fade out as it shrinks
+			var sz : float = CELL * s
+			if sz < 6.0:
+				continue
+			var col : Color = COLORS[_pixel_color(pat, r, c)]
+			col.a = a
+			var cxp : float = GRID_X + float(c) * GRID_STEP + CELL * 0.5
+			var cyp : float = GRID_Y + float(r) * GRID_STEP + CELL * 0.5
+			var rect := Rect2(cxp - sz * 0.5, cyp - sz * 0.5, sz, sz)
+			BlockSkins.paint(fx_layer, grid.block_style, rect, col,
+				base_seed + r * 7 + c * 13, 0.0, rect, false)
 
 func _fx_sparkle(pos: Vector2, size: float, col: Color) -> void:
 	fx_layer.draw_line(pos + Vector2(-size, 0), pos + Vector2(size, 0), col, 1.5)
@@ -2386,7 +2565,39 @@ func _draw_streak_meter() -> void:
 		draw_circle(fx + Vector2(0, 2.5), 2.0, Color(1, 1, 1, 0.9 * a))
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+# No piece fits. If a charged power could bail them out, offer a timed rescue
+# instead of ending the run; otherwise it's a real game over.
+func _try_game_over() -> void:
+	if grid.can_any_fit(_shapes_array(), placed):
+		return
+	if tutorial == null and meter >= METER_BOMB and not rescue_active:
+		_begin_rescue()
+		return
+	_game_over()
+
+func _begin_rescue() -> void:
+	rescue_active = true
+	rescue_timer  = RESCUE_SECS
+	power_pulse   = 1.0
+	Sfx.play_tick()
+	_buzz(45)
+	queue_redraw()
+
+# Called once a fired power finishes. If the board now fits, great. If a piece
+# STILL doesn't fit (e.g. an ult that didn't open the right gap), hand over a
+# fresh, fitting tray — spending an ability must never end the run.
+func _resolve_after_power() -> void:
+	if grid.can_any_fit(_shapes_array(), placed):
+		if rescue_active:
+			rescue_active = false
+			Sfx.play_best()
+			_buzz(30)
+		return
+	rescue_active = false
+	_spawn_pieces()
+
 func _game_over() -> void:
+	rescue_active = false
 	run_over = true
 	GameState.snapshot(grid.cells, score, pieces, placed,
 		sets_given, lines_cleared, theme_idx, combo, placements,
@@ -2404,6 +2615,8 @@ func _game_over() -> void:
 func _save_run() -> void:
 	if run_over:
 		return
+	if tutorial != null:
+		return   # scripted tutorial board must never be written as a resumable run
 	GameState.snapshot(grid.cells, score, pieces, placed,
 		sets_given, lines_cleared, theme_idx, combo, placements,
 		max_combo, board_clears, grid.seeds, meter)
@@ -2431,6 +2644,65 @@ func _set_score_text(n: int) -> void:
 func _refresh_best() -> void:
 	if GameState.best_score > 0:
 		best_label.text = "BEST  " + str(GameState.best_score)
+
+# ── First-run tutorial coach ─────────────────────────────────────────────────
+func _start_tutorial() -> void:
+	var coach_script := load("res://scripts/Tutorial.gd")
+	if coach_script == null:
+		return
+	tutorial = coach_script.new()
+	add_child(tutorial)
+	tutorial.begin(self, grid)
+
+# Wipe the board to empty (no animation) — used to stage each tutorial lesson
+func tut_clear_board() -> void:
+	for r in GRID_ROWS:
+		for c in GRID_COLS:
+			grid.cells[r][c] = null
+			grid.seeds[r][c] = r * 7 + c * 13
+	grid.clear_ghost()
+	grid.queue_redraw()
+
+func tut_fill_cell(r: int, c: int, col: Color) -> void:
+	grid.cells[r][c] = col
+	grid.seeds[r][c] = r * 7 + c * 13
+	grid.queue_redraw()
+
+# Force the tray to a specific set of pieces (always three; pads colours from COLORS)
+func tut_set_pieces(shapes: Array) -> void:
+	pieces = []
+	for i in shapes.size():
+		var sh : Array  = shapes[i]
+		var cl : Color  = COLORS[i % COLORS.size()]
+		pieces.append({"shape": sh, "color": cl, "pattern": (i + 1) * 4099})
+	placed        = [false, false, false]
+	dragging_slot = -1
+	tray_pop_t    = 1.0
+	queue_redraw()
+
+func tut_set_meter(v: float) -> void:
+	meter = clampf(v, 0.0, METER_FULL)
+	queue_redraw()
+
+# Lock guided placement to one piece + one cell (magnetised); -1 slot clears it
+func tut_lock(slot: int, cell: Vector2i) -> void:
+	tut_lock_slot = slot
+	tut_lock_cell = cell
+
+func tut_unlock() -> void:
+	tut_lock_slot = -1
+
+# Tutorial complete: drop the coach and let the SAME run continue seamlessly —
+# the board, score and pieces they built during the lesson are now their run.
+func tut_finish() -> void:
+	if tutorial != null:
+		tutorial.queue_free()
+		tutorial = null
+	tut_unlock()
+	GameState.tutorial_active = false
+	GameState.tutorial_done   = true
+	GameState._save()
+	_save_run()
 
 # ── Pause / settings overlay ─────────────────────────────────────────────────
 func _make_chunky_button(label_text: String, fill: Color, font_size: int = 20) -> Button:
