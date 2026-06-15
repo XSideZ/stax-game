@@ -102,8 +102,16 @@ func _ready() -> void:
 # ── Stats card: LINES / BEST STREAK / BOARD CLEARS as columns ────────────────
 func _card_style() -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(1, 1, 1, 0.06)
-	sb.set_corner_radius_all(16)
+	sb.bg_color = Color(0.09, 0.07, 0.13, 0.90)   # near-solid dark so the gold rim pops
+	sb.set_corner_radius_all(18)
+	sb.corner_detail = 8
+	# Bright gold stroke — ties the card to the XP bar and LV chip
+	sb.set_border_width_all(2)
+	sb.border_color = Color(0.95, 0.78, 0.20, 0.95)
+	# Soft gold halo around the whole frame (even glow, no offset)
+	sb.shadow_color = Color(0.95, 0.78, 0.20, 0.22)
+	sb.shadow_size = 9
+	sb.shadow_offset = Vector2.ZERO
 	return sb
 
 func _build_stats_card() -> void:
@@ -131,6 +139,8 @@ func _build_stats_card() -> void:
 		v.text = stats[i][0]
 		v.add_theme_font_size_override("font_size", 22)
 		v.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+		v.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+		v.add_theme_constant_override("outline_size", 5)
 		v.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		v.size = Vector2(113, 30)
 		v.position = Vector2(float(i) * 113.0, 6)
@@ -153,6 +163,7 @@ var xp_level_label : Label
 var xp_gain_label  : Label
 var xp_count_label : Label
 var xp_fill        : Panel
+var xp_gloss       : Panel
 var shown_level    : int = 1
 
 const XP_BAR_W := 306.0
@@ -168,6 +179,8 @@ func _build_xp_card() -> void:
 	xp_level_label = Label.new()
 	xp_level_label.add_theme_font_size_override("font_size", 19)
 	xp_level_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	xp_level_label.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	xp_level_label.add_theme_constant_override("outline_size", 5)
 	xp_level_label.position = Vector2(17, 6)
 	xp_level_label.size = Vector2(160, 28)
 	xp_level_label.pivot_offset = Vector2(40, 14)
@@ -177,6 +190,8 @@ func _build_xp_card() -> void:
 	xp_gain_label.text = "+" + str(GameState.last_xp_gain) + " XP"
 	xp_gain_label.add_theme_font_size_override("font_size", 17)
 	xp_gain_label.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20))
+	xp_gain_label.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
+	xp_gain_label.add_theme_constant_override("outline_size", 4)
 	xp_gain_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	xp_gain_label.position = Vector2(163, 7)
 	xp_gain_label.size = Vector2(160, 28)
@@ -199,6 +214,16 @@ func _build_xp_card() -> void:
 	xp_fill.position = Vector2(17, 42)
 	xp_fill.size = Vector2(0, 14)
 	card.add_child(xp_fill)
+
+	# Glossy highlight stripe along the top of the fill — tracks its animated width
+	xp_gloss = Panel.new()
+	var gsb := StyleBoxFlat.new()
+	gsb.bg_color = Color(1, 1, 1, 0.30)
+	gsb.set_corner_radius_all(4)
+	xp_gloss.add_theme_stylebox_override("panel", gsb)
+	xp_gloss.position = Vector2(20, 45)
+	xp_gloss.size = Vector2(0, 4)
+	card.add_child(xp_gloss)
 
 	xp_count_label = Label.new()
 	xp_count_label.add_theme_font_size_override("font_size", 11)
@@ -233,12 +258,14 @@ func _set_xp_display(v: float) -> void:
 	if lvl >= GameState.MAX_LEVEL:
 		xp_level_label.text = "LEVEL " + str(lvl) + " (MAX)"
 		xp_fill.size.x = XP_BAR_W
+		xp_gloss.size.x = maxf(XP_BAR_W - 6.0, 0.0)
 		xp_count_label.text = "MAX LEVEL"
 		return
 	xp_level_label.text = "LEVEL " + str(lvl)
 	@warning_ignore("static_called_on_instance")
 	var prog : Array = GameState.progress_for_xp(xp)
 	xp_fill.size.x = XP_BAR_W * clampf(float(prog[0]) / float(maxi(prog[1], 1)), 0.0, 1.0)
+	xp_gloss.size.x = maxf(xp_fill.size.x - 6.0, 0.0)
 	xp_count_label.text = str(prog[0]) + " / " + str(prog[1]) + " XP"
 
 func _show_achievement_toast(id: String, delay: float) -> void:
@@ -286,7 +313,13 @@ func _show_achievement_toast(id: String, delay: float) -> void:
 	t.tween_callback(panel.queue_free)
 
 func _count_tick(v: float) -> void:
-	score_label.text = str(int(v))
+	var s := str(int(v))
+	score_label.text = s
+	var fs := 110
+	if   s.length() >= 7: fs = 66
+	elif s.length() == 6: fs = 80
+	elif s.length() == 5: fs = 96
+	score_label.add_theme_font_size_override("font_size", fs)
 	score_label.scale = Vector2.ONE * (1.0 + fmod(v, 7.0) * 0.004)
 
 func _start_best_shimmer() -> void:
@@ -412,6 +445,8 @@ func _build_leaderboard() -> void:
 		else:
 			col = Color(1, 1, 1, 0.45 - i * 0.06)
 		lbl.add_theme_color_override("font_color", col)
+		lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.8))
+		lbl.add_theme_constant_override("outline_size", 4)
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.size = Vector2(300, 28)
 		lbl.position = Vector2(57 - 340, 514.0 + i * 30.0)

@@ -209,9 +209,16 @@ const ACH_GROUPS : Array = [
 const TIER_NUMERALS : Array = ["I", "II", "III"]
 
 static func fmt(n: int) -> String:
-	if n < 1000:
-		return str(n)
-	return str(n / 1000) + "," + str(n % 1000).pad_zeros(3)
+	# Group every 3 digits — correct for millions+ (old version only added ONE comma)
+	var s := str(absi(n))
+	var out := ""
+	var cnt := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		cnt += 1
+		if cnt % 3 == 0 and i > 0:
+			out = "," + out
+	return ("-" + out) if n < 0 else out
 
 # Live value backing each quest group
 func ach_value(group_id: String) -> int:

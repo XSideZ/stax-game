@@ -104,7 +104,7 @@ const DRAG_LIFT := 70.0
 # How far (in cells) the snap will reach for the nearest valid spot when the
 # touch isn't dead-on — bigger = more forgiving for fast play. The ghost shows
 # exactly where it lands, so over-reach stays visible before releasing.
-const SNAP_REACH := 2
+const SNAP_REACH := 4
 
 # ── Power meter ───────────────────────────────────────────────────────────────
 # One charge bar fills from clears. Spend it (tap the orb) on the best ability
@@ -142,6 +142,7 @@ var placements    : int     = 0      # pieces placed this run — drives smart s
 var run_over      : bool    = false  # blocks auto-save once the run has ended
 var max_combo     : int     = 0      # best streak this run (game-over breakdown)
 var board_clears  : int     = 0      # full-board clears this run
+var sets_since_clear : int = 0       # sets since the last board clear → drives the drain
 var streak_lost_t : float   = 0.0    # drives the "streak lost" flash on the meter
 var drag_pop_t    : float   = 0.0    # pickup swell on the dragged piece
 
@@ -177,6 +178,7 @@ var flash_col : Color = Color.TRANSPARENT
 # Animated orbs
 const ORB_COUNT := 14
 var orbs: Array = []
+var orb_boost : float = 0.0   # transient speed whoosh on biome change, decays in _process
 
 # Pause / settings overlay
 const GEAR_RECT := Rect2(360.0, 26.0, 42.0, 42.0)
@@ -246,8 +248,9 @@ func _make_orb() -> Dictionary:
 	}
 
 func _update_orbs(delta: float) -> void:
+	var spd := 1.0 + orb_boost
 	for orb in orbs:
-		orb["pos"] += orb["vel"] * delta
+		orb["pos"] += orb["vel"] * delta * spd
 		if orb["pos"].x < -140.0 or orb["pos"].x > 554.0:
 			orb["vel"].x = -orb["vel"].x
 		if orb["pos"].y < -140.0 or orb["pos"].y > 1036.0:
@@ -256,6 +259,8 @@ func _update_orbs(delta: float) -> void:
 # ── Process ───────────────────────────────────────────────────────────────────
 func _process(delta: float) -> void:
 	_update_orbs(delta)
+	if orb_boost > 0.0:
+		orb_boost = maxf(0.0, orb_boost - delta * 1.4)
 
 	if theme_lerp < 1.0:
 		theme_lerp = minf(theme_lerp + delta / 1.5, 1.0)
@@ -311,7 +316,7 @@ func _process(delta: float) -> void:
 		disp_score = lerpf(disp_score, float(score), clampf(delta * 14.0, 0.0, 1.0))
 		if absf(float(score) - disp_score) < 1.0:
 			disp_score = float(score)
-		score_label.text = str(int(round(disp_score)))
+		_set_score_text(int(round(disp_score)))
 
 	queue_redraw()
 	drag_layer.queue_redraw()
@@ -322,11 +327,9 @@ func _spawn_pieces() -> void:
 	placed        = [false, false, false]
 	dragging_slot = -1
 
-	# Early game: try to hand the player one piece that can empty the board, so
-	# full board-clears come constantly up front.
-	var forced_clear : Array = []
-	if sets_given < EARLY_CLEAR_SETS and randf() < EARLY_CLEAR_CHANCE:
-		forced_clear = _pick_board_clear_shape()
+	# Slot 0 is gifted a board-clearing piece whenever one exists — for the WHOLE
+	# game, not just early — so board clears keep happening across long runs.
+	var forced_clear : Array = _pick_board_clear_shape()
 
 	var picked_keys: Array = []
 	for _i in 3:
@@ -355,6 +358,7 @@ func _spawn_pieces() -> void:
 			"pattern": randi() % 1000000})
 
 	sets_given += 1
+	sets_since_clear += 1
 	tray_pop_t = 1.0
 	grid.clear_ghost()
 	queue_redraw()
@@ -363,6 +367,11 @@ func _spawn_pieces() -> void:
 
 func _progression() -> float:
 	return clampf((sets_given - 2) / 10.0, 0.0, 1.0)
+
+# Drain toward a board clear: early in the run, or when it's been too long since
+# the last one. Drives the small-clearing-piece bias that sets up board clears.
+func _wants_clear() -> bool:
+	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= CLEAR_DROUGHT
 
 # Early-game generosity fades GRADUALLY: 85% smart picks at move 0, easing
 # to 0% by move ~45. Smart picks complete lines (multi-line wins outright);
@@ -375,6 +384,10 @@ const SMART_FADE_MOVES := 45.0
 # that can empty the board, so full board-clears happen constantly up front.
 const EARLY_CLEAR_SETS   := 14
 const EARLY_CLEAR_CHANCE := 1.0
+# After this many sets with no full board clear, briefly favour small clearing
+# pieces again (a "drain") to set up another board clear — keeps board clears
+# frequent across long runs, not just at the start.
+const CLEAR_DROUGHT := 5
 
 const BUILDER_SHAPES : Array = [
 	[[0,0],[1,0],[2,0],[3,0]],
@@ -387,19 +400,37 @@ const BUILDER_SHAPES : Array = [
 	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1],[0,2],[1,2],[2,2]],
 ]
 
+# Clean rectangular tiles for the opening / drain: they pack the board EVENLY and
+# clear in big chunks (Block-Blast style). Weighted toward 3x3 and 2x3/3x2 — they
+# score big and set up easy board clears, and never leave a stray block the way
+# L/odd shapes do. Duplicates raise the odds of the bigger tiles.
+const CLEAN_SHAPES : Array = [
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1],[0,2],[1,2],[2,2]],  # 3x3
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1],[0,2],[1,2],[2,2]],  # 3x3
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]],                     # 3x2
+	[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]],                     # 3x2
+	[[0,0],[1,0],[0,1],[1,1],[0,2],[1,2]],                     # 2x3
+	[[0,0],[1,0],[0,1],[1,1],[0,2],[1,2]],                     # 2x3
+	[[0,0],[1,0],[0,1],[1,1]],                                 # 2x2
+]
+
 func _pick_shape() -> Array:
-	# EARLY GAME = a fast board-clear puzzle: ONLY small pieces, strongly biased to
-	# completing lines, so the board stays tiny and clears keep emptying it.
-	if sets_given < EARLY_CLEAR_SETS:
-		# Every early piece prefers (1) a shape that empties the whole board, then
-		# (2) one that completes a line, then (3) a small filler — so the opening
-		# is a constant, easy board-clear loop, not just the occasional slot-0 gift.
+	# DRAIN MODE (early game, or a board-clear drought): ONLY small pieces, strongly
+	# biased to completing lines, so the board drains toward a full clear.
+	if _wants_clear():
+		# Block-Blast-style opening: prefer (1) a one-piece board clear, then (2) a
+		# clean rectangle that completes a line, then (3) any clean rectangle that
+		# fits — big square tiles fill the board EVENLY and clear in big chunks,
+		# instead of odd shapes that leave a stray block (which blocks board clears).
 		var bc := _pick_board_clear_shape()
 		if not bc.is_empty():
 			return bc
-		var small := _pick_combo_shape(EARLY_SHAPES)
-		if not small.is_empty():
-			return small
+		var combo := _pick_combo_shape(CLEAN_SHAPES)
+		if not combo.is_empty():
+			return combo
+		var rect := _pick_fitting(CLEAN_SHAPES)
+		if not rect.is_empty():
+			return rect
 		return _pick_helpful_shape()
 	var smart_p : float = clampf(0.85 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.85)
 	if randf() < smart_p:
@@ -536,6 +567,23 @@ func _pick_board_clear_shape() -> Array:
 		return []
 	return cands[randi() % cands.size()]
 
+# A random shape from `pool` that fits somewhere (pool duplicates weight the odds).
+# Returns [] if nothing fits.
+func _pick_fitting(pool: Array) -> Array:
+	var fitting : Array = []
+	for s in pool:
+		for r in GRID_ROWS:
+			var ok := false
+			for cc in GRID_COLS:
+				if grid.can_place(s, r, cc):
+					ok = true; break
+			if ok:
+				fitting.append(s)
+				break
+	if fitting.is_empty():
+		return []
+	return fitting[randi() % fitting.size()]
+
 func _pick_helpful_shape() -> Array:
 	var best_row    := -1
 	var best_filled := 0
@@ -628,7 +676,7 @@ func _restore_state() -> void:
 	placed = GameState.save_placed.duplicate()
 
 	disp_score = float(score)   # show restored score instantly, no count-up
-	score_label.text = str(score)
+	_set_score_text(score)
 	_update_combo_label()
 	grid.queue_redraw()
 	queue_redraw()
@@ -735,6 +783,7 @@ func _end_drag(pos: Vector2) -> void:
 		if grid.is_board_empty():
 			gained += BOARD_CLEAR_PTS
 			board_clears += 1
+			sets_since_clear = 0
 			Sfx.play_board_clear()
 			_buzz(90)
 			_show_board_clear_popup()
@@ -792,7 +841,7 @@ func _fire_power() -> void:
 		_power_gravity()
 	elif meter >= METER_LASER:
 		meter -= METER_LASER
-		_power_laser()
+		_power_twin_bomb()
 	elif meter >= METER_BOMB:
 		meter -= METER_BOMB
 		_power_bomb()
@@ -834,49 +883,51 @@ func _power_bomb() -> void:
 	power_busy = false
 	queue_redraw()
 
-func _power_laser() -> void:
+func _power_twin_bomb() -> void:
 	power_busy = true
-	# A bolt of lightning that ricochets diagonally around the board, burning
-	# every cell on its zig-zag path — far bigger than the old straight line.
-	var half := CELL * 0.5
-	var seq : Array = []          # full bounce trajectory (may revisit cells)
-	var cell_list : Array = []    # distinct cells to incinerate
-	var seen : Dictionary = {}
-	var pos := Vector2i(randi() % GRID_COLS, randi() % GRID_ROWS)
-	var vel := Vector2i(1 if randi() % 2 == 0 else -1, 1 if randi() % 2 == 0 else -1)
-	var steps := 16 + randi() % 8   # 16..23 ricochets → a long, wild zig-zag
-	for _s in steps:
-		seq.append(pos)
-		if not seen.has(pos):
-			seen[pos] = true
-			cell_list.append(pos)
-		var nx := pos.x + vel.x
-		var ny := pos.y + vel.y
-		if nx < 0 or nx >= GRID_COLS:
-			vel.x = -vel.x
-			nx = pos.x + vel.x
-		if ny < 0 or ny >= GRID_ROWS:
-			vel.y = -vel.y
-			ny = pos.y + vel.y
-		pos = Vector2i(nx, ny)
-	# Screen-space polyline through every bounce point for the beam FX
-	var path := PackedVector2Array()
-	for cv : Vector2i in seq:
-		path.append(Vector2(GRID_X + float(cv.x) * GRID_STEP + half,
-			GRID_Y + float(cv.y) * GRID_STEP + half))
-	var lcol := Color(0.55, 0.95, 1.0)
-	effects.append({"type": "laser_charge", "t": 0.0, "dur": 0.30, "path": path, "color": lcol})
+	# Twice the first ability: TWO bombs at two DIFFERENT random spots.
+	var t1 := _random_board_target()
+	var t2 := _random_board_target()
+	var tries := 0
+	while t2 == t1 and tries < 30:
+		t2 = Vector2i(randi() % GRID_COLS, randi() % GRID_ROWS)
+		tries += 1
+	if t2 == t1:
+		t2 = Vector2i((t1.x + 1) % GRID_COLS, t1.y)   # guaranteed never the same spot
+	var targets : Array = [t1, t2]
+
+	for tg : Vector2i in targets:
+		var sp := Vector2(GRID_X + float(tg.x) * GRID_STEP + CELL * 0.5,
+			GRID_Y + float(tg.y) * GRID_STEP + CELL * 0.5)
+		effects.append({"type": "bomb_drop", "t": 0.0, "dur": 0.42, "pos": sp})
 	fx_layer.queue_redraw()
-	await get_tree().create_timer(0.30).timeout
-	effects.append({"type": "laser_fire", "t": 0.0, "dur": 0.5, "path": path, "color": lcol})
-	shake_t   = maxf(shake_t, 0.40)
-	flash_t   = maxf(flash_t, 0.40)
-	flash_col = Color(0.6, 0.95, 1.0, 1.0)
-	_buzz(55)
-	Sfx.play_clear(3)
-	var cleared := grid.laser_clear(cell_list, Vector2(3.5, 3.5))
-	_award_power_clear(cleared, 2)
-	await get_tree().create_timer(0.35).timeout
+	Sfx.play_pickup()
+	await get_tree().create_timer(0.42).timeout
+
+	# Union of both 3×3 blasts (overlaps de-duped) → one shatter pass for both
+	var cell_list : Array = []
+	var seen : Dictionary = {}
+	for tg : Vector2i in targets:
+		var sp := Vector2(GRID_X + float(tg.x) * GRID_STEP + CELL * 0.5,
+			GRID_Y + float(tg.y) * GRID_STEP + CELL * 0.5)
+		effects.append({"type": "bomb_blast", "t": 0.0, "dur": 0.65, "pos": sp})
+		for dr in range(-1, 2):
+			for dc in range(-1, 2):
+				var r := tg.y + dr
+				var c := tg.x + dc
+				if r >= 0 and r < GRID_ROWS and c >= 0 and c < GRID_COLS:
+					var key := Vector2i(c, r)
+					if not seen.has(key):
+						seen[key] = true
+						cell_list.append(key)
+	shake_t   = maxf(shake_t, 0.50)
+	flash_t   = maxf(flash_t, 0.60)
+	flash_col = Color(1.0, 0.7, 0.3, 1.0)
+	_buzz(70)
+	Sfx.play_board_clear()
+	var cleared := grid.pop_cells(cell_list, Vector2((t1.x + t2.x) * 0.5, (t1.y + t2.y) * 0.5))
+	_award_power_clear(cleared, 0)
+	await get_tree().create_timer(0.45).timeout
 	power_busy = false
 	queue_redraw()
 
@@ -898,7 +949,17 @@ func _power_gravity() -> void:
 	var cleared := grid.slam_clear(dir)
 	var lines := grid.last_lines_cleared
 	_award_power_clear(cleared, lines)
-	await get_tree().create_timer(0.4).timeout
+	await get_tree().create_timer(0.45).timeout
+	# Bounce everything to the wall ONCE more so the shattered impact layer leaves
+	# no gap — blocks re-settle flush against the wall.
+	grid.start_slam(dir)
+	await get_tree().create_timer(Grid.SLAM_DUR + 0.04).timeout
+	var settled := grid.check_and_clear()
+	if settled > 0:
+		_award_power_clear(settled, grid.last_lines_cleared)
+		await get_tree().create_timer(0.4).timeout
+	else:
+		await get_tree().create_timer(0.12).timeout
 	power_busy = false
 	queue_redraw()
 
@@ -913,6 +974,7 @@ func _award_power_clear(cells_cleared: int, lines: int) -> void:
 	if grid.is_board_empty():
 		pts += BOARD_CLEAR_PTS
 		board_clears += 1
+		sets_since_clear = 0
 		Sfx.play_board_clear()
 		_show_board_clear_popup()
 	score += pts
@@ -1015,7 +1077,7 @@ func _get_snap(pos: Vector2, shape: Array) -> Vector2i:
 	)
 
 # Generous snap: if the raw cell isn't placeable, fall to the nearest placeable
-# spot within ±1 cell so the shadow forgives near-misses.
+# spot within ±SNAP_REACH cells so the shadow forgives near-misses on fast play.
 func _best_snap(pos: Vector2, shape: Array) -> Vector2i:
 	var base := _get_snap(pos, shape)
 	if grid.can_place(shape, base.y, base.x):
@@ -1061,7 +1123,7 @@ func _advance_theme() -> void:
 	var orb_col: Color = THEMES[theme_idx]["orb"]
 	for orb in orbs:
 		orb["color"] = Color(orb_col.r, orb_col.g, orb_col.b, orb["color"].a)
-		orb["vel"]   *= 1.4   # burst of speed on transition
+	orb_boost = 2.0   # transient whoosh on biome change — decays in _process, never compounds (was *=1.4 which compounded into runaway speed)
 
 	_apply_block_style()
 
@@ -1165,11 +1227,15 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, Vector2(414, 896)),
 			Color(flash_col.r, flash_col.g, flash_col.b, flash_t * 0.40), true)
 
-	# Score badge + best pill behind the labels (must track the label rects
-	# in Game.tscn: score box y16-126, best box y134-164, both centred on 207)
-	_rr_fill(Rect2(107, 18, 200, 106), 26.0, Color(0, 0, 0, 0.25))
-	_rr_outline(Rect2(107, 18, 200, 106), 26.0, Color(1, 1, 1, 0.07), 1.5)
-	_rr_fill(Rect2(137, 134, 140, 30), 15.0, Color(0, 0, 0, 0.30))
+	# Score floats as an outlined candy numeral (no box). A soft biome-accent halo
+	# behind it gives each skin its own personality; the best pill is accent-tinted.
+	var sacc : Color = THEMES[_visual_idx()]["accent"]
+	draw_circle(Vector2(207, 66), 98.0, Color(sacc.r, sacc.g, sacc.b, 0.07))
+	draw_circle(Vector2(207, 66), 62.0, Color(sacc.r, sacc.g, sacc.b, 0.09))
+	var bpill := Rect2(132, 125, 150, 31)
+	_rr_fill(bpill, 15.0, Color(0, 0, 0, 0.32))
+	_rr_fill(bpill, 15.0, Color(sacc.r, sacc.g, sacc.b, 0.20))
+	_rr_outline(bpill, 15.0, Color(sacc.r, sacc.g, sacc.b, 0.60), 1.5)
 
 	# Settings gear button (top-right)
 	_draw_gear_button()
@@ -1185,7 +1251,7 @@ func _draw() -> void:
 	var grid_rect := Rect2(GRID_X - 8, GRID_Y - 8,
 		GRID_COLS * GRID_STEP + 14, GRID_ROWS * GRID_STEP + 14)
 	_rr_fill(grid_rect, 14.0, Color(0, 0, 0, 0.28))
-	_rr_outline(grid_rect, 14.0, Color(1, 1, 1, 0.06), 1.5)
+	# No generic outline — the per-skin reactive frame (Grid._draw) owns the board border
 
 	# Tray
 	for i in 3:
@@ -1784,14 +1850,20 @@ func _rr_grad(r: Rect2, rad: float, top_col: Color, bot_col: Color) -> void:
 
 func _draw_gear_button() -> void:
 	var c := GEAR_RECT.get_center()
-	_rr_fill(GEAR_RECT, 12.0, Color(0, 0, 0, 0.30))
-	_rr_outline(GEAR_RECT, 12.0, Color(1, 1, 1, 0.15), 1.5)
-	var gear_col := Color(1, 1, 1, 0.65)
-	draw_arc(c, 9.0, 0, TAU, 24, gear_col, 3.0, false)
-	draw_circle(c, 3.0, gear_col)
+	var acc : Color = THEMES[_visual_idx()]["accent"]
+	# Chunky candy chip: soft bottom ledge, dark face with a faint biome tint, an
+	# accent rim, and a crisp white gear with a hollow centre.
+	_rr_fill(Rect2(GEAR_RECT.position + Vector2(0, 3), GEAR_RECT.size), 13.0, Color(0, 0, 0, 0.35))
+	_rr_fill(GEAR_RECT, 13.0, Color(0.12, 0.10, 0.17, 0.92))
+	_rr_fill(GEAR_RECT, 13.0, Color(acc.r, acc.g, acc.b, 0.12))
+	_rr_outline(GEAR_RECT, 13.0, Color(acc.r, acc.g, acc.b, 0.60), 1.5)
+	var gear_col := Color(1, 1, 1, 0.92)
 	for i in 8:
 		var a := float(i) / 8.0 * TAU
-		draw_line(c + Vector2(cos(a), sin(a)) * 9.0, c + Vector2(cos(a), sin(a)) * 13.0, gear_col, 3.0)
+		draw_line(c + Vector2(cos(a), sin(a)) * 8.5, c + Vector2(cos(a), sin(a)) * 12.5, gear_col, 3.2)
+	draw_arc(c, 8.5, 0, TAU, 28, gear_col, 3.2, false)
+	draw_circle(c, 3.4, gear_col)
+	draw_circle(c, 2.0, Color(0.12, 0.10, 0.17, 1.0))
 
 # ── Power orb (charge meter + spend button) ──────────────────────────────────
 func _power_tier() -> int:
@@ -1807,7 +1879,7 @@ func _draw_power_orb() -> void:
 	var tcol : Color
 	match tier:
 		3: tcol = Color(1.0, 0.85, 0.30)
-		2: tcol = Color(0.45, 0.92, 1.0)
+		2: tcol = Color(1.0, 0.42, 0.28)
 		1: tcol = Color(1.0, 0.58, 0.20)
 		_: tcol = Color(0.55, 0.55, 0.68)
 	# Pulse gets faster + stronger the higher the tier, to pull the eye
@@ -1855,11 +1927,14 @@ func _draw_power_icon(c: Vector2, tier: int, icol: Color, pulse: float) -> void:
 				draw_line(c + dir * 4.0, c + dir * 6.5 - perp * 2.6, Color(1.0, 0.9, 0.5), 2.0)
 			draw_circle(c, 2.6 + pulse * 1.6, Color(1, 1, 1, 0.95))
 		2:
-			# Laser: a hot diagonal bolt with bright tips
-			draw_line(c + Vector2(-9, 5), c + Vector2(9, -5), icol, 3.0)
-			draw_line(c + Vector2(-9, 5), c + Vector2(9, -5), Color(1, 1, 1, 0.6), 1.0)
-			draw_circle(c + Vector2(9, -5), 2.6, Color(1, 1, 1, 0.85))
-			draw_circle(c + Vector2(-9, 5), 2.0, Color(icol.r, icol.g, icol.b, 0.7))
+			# Twin bomb: two small bombs side by side, each with a fuse spark
+			for off : float in [-5.0, 5.0]:
+				var bc := c + Vector2(off, 2.5)
+				draw_circle(bc, 5.0, Color(0.10, 0.10, 0.15))
+				draw_arc(bc, 5.0, 0, TAU, 16, icol, 1.8, true)
+				draw_circle(bc + Vector2(-1.6, -0.6), 1.1, Color(icol.r, icol.g, icol.b, 0.6))
+				draw_line(bc + Vector2(2.4, -3.4), bc + Vector2(4.2, -6.6), icol, 1.6)
+				draw_circle(bc + Vector2(4.2, -6.6), 1.4 + 0.4 * pulse, Color(1.0, 0.8, 0.3, 0.55 + 0.35 * pulse))
 		_:
 			# Bomb (tier 0 dim, tier 1 lit): round body, fuse + spark
 			draw_circle(c + Vector2(0, 2), 8.0, Color(0.10, 0.10, 0.15))
@@ -2268,6 +2343,16 @@ func _pop_score(gained: int) -> void:
 		score_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.15))
 		await get_tree().create_timer(0.4).timeout
 		score_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+
+# Score numeral shrinks as it grows so huge scores (up to 1M+) never overflow.
+func _set_score_text(n: int) -> void:
+	var s := str(n)
+	score_label.text = s
+	var fs := 80
+	if   s.length() >= 7: fs = 50
+	elif s.length() == 6: fs = 60
+	elif s.length() == 5: fs = 70
+	score_label.add_theme_font_size_override("font_size", fs)
 
 func _refresh_best() -> void:
 	if GameState.best_score > 0:

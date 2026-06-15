@@ -7,6 +7,8 @@ const CELL := 44.0
 const GAP  := 2.0
 const STEP := CELL + GAP
 const RAD  := 7.0    # corner radius for the bubbly look
+const BOARD_SPAN := COLS * STEP - GAP    # 366 px: cell-area edge to edge
+const FRAME_MARGIN := 40.0               # glow room around the board for the frame
 
 var cells       : Array = []
 var seeds       : Array = []   # per-cell skin pattern seed — each piece is a
@@ -36,6 +38,8 @@ var last_place_center := Vector2.ZERO
 
 # Board-frame reaction: spikes on a clear, decays — drives the border flare
 var frame_pulse : float = 0.0
+var frame_rect : ColorRect          # GPU-shader layer for the animated border
+var frame_mat  : ShaderMaterial
 
 func _bump_frame(strong: bool) -> void:
 	frame_pulse = maxf(frame_pulse, 1.5 if strong else 0.85)
@@ -57,6 +61,24 @@ func _ready() -> void:
 		seeds[r].resize(COLS)
 		for c in COLS:
 			seeds[r][c] = r * 7 + c * 13
+
+	# Animated multicolour border: a single GPU-shader ColorRect. It animates on
+	# the GPU via TIME, so there is NO per-frame redraw and it stays perfectly
+	# smooth (true SDF rounded corners). We only push the clear-flare + biome hue.
+	var fs := BOARD_SPAN + 2.0 * FRAME_MARGIN
+	frame_mat = ShaderMaterial.new()
+	frame_mat.shader = load("res://assets/shaders/board_frame.gdshader")
+	frame_mat.set_shader_parameter("u_size", Vector2(fs, fs))
+	frame_mat.set_shader_parameter("u_half", BOARD_SPAN * 0.5 + 6.0)
+	frame_mat.set_shader_parameter("u_radius", 16.0)
+	frame_mat.set_shader_parameter("u_thickness", 3.0)
+	frame_rect = ColorRect.new()
+	frame_rect.material = frame_mat
+	frame_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame_rect.size = Vector2(fs, fs)
+	frame_rect.position = Vector2(BOARD_SPAN * 0.5 - fs * 0.5, BOARD_SPAN * 0.5 - fs * 0.5)
+	frame_rect.z_index = 1
+	add_child(frame_rect)
 
 func _process(delta: float) -> void:
 	var needs_redraw := false
@@ -95,22 +117,18 @@ func _process(delta: float) -> void:
 	if BlockSkins.ANIMATED.has(block_style):
 		needs_redraw = true
 
-	# Board frame: decay the clear-flare, and keep animating fancy/LED frames
+	# Board frame: decay the clear-flare and push it + the biome hue to the shader.
+	# The border animates on the GPU, so nothing needs to redraw here.
 	if frame_pulse > 0.0:
 		frame_pulse = maxf(0.0, frame_pulse - delta * 2.2)
-		needs_redraw = true
-	if BlockSkins.frame_animated(block_style):
-		needs_redraw = true
+	frame_mat.set_shader_parameter("u_pulse", frame_pulse)
+	var acc : Color = GameState.THEMES[block_style % GameState.THEMES.size()].get("accent", Color(0.6, 0.8, 1.0))
+	frame_mat.set_shader_parameter("u_col", Vector3(acc.r, acc.g, acc.b))
 
 	if needs_redraw:
 		queue_redraw()
 
 func _draw() -> void:
-	# Biome-themed border around the field, reacting to the latest clear
-	var td : Dictionary = GameState.THEMES[block_style % GameState.THEMES.size()]
-	var acc : Color = td.get("accent", Color(0.6, 0.8, 1.0))
-	BlockSkins.paint_board_frame(self, block_style,
-		Rect2(-2.0, -2.0, COLS * STEP - GAP + 4.0, ROWS * STEP - GAP + 4.0), acc, frame_pulse)
 	if slamming:
 		_draw_slam()
 		return
@@ -484,8 +502,8 @@ func bomb_clear(cr: int, cc: int, radius: int) -> int:
 				cell_list.append(Vector2i(c, r))
 	return _start_pop(cell_list, Vector2(cc, cr))
 
-# LASER: incinerate every cell in the supplied line (grid coords).
-func laser_clear(cell_list: Array, origin: Vector2) -> int:
+# Clear an arbitrary set of cells (grid coords) with the shatter animation.
+func pop_cells(cell_list: Array, origin: Vector2) -> int:
 	return _start_pop(cell_list, origin)
 
 # GRAVITY SLAM: compact every block toward `dir` (one of the 4 axes). Commits

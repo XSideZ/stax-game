@@ -36,8 +36,10 @@ offset_right = 120.0
 offset_bottom = 285.0
 text = "0"
 horizontal_alignment = 1
-theme_override_font_sizes/font_size = 110
 theme_override_colors/font_color = Color(1, 1, 1, 0.95)
+theme_override_colors/font_outline_color = Color(0.05, 0.04, 0.09, 0.9)
+theme_override_constants/outline_size = 14
+theme_override_font_sizes/font_size = 110
 
 [node name="BestScore" type="Label" parent="UI"]
 anchors_preset = 8
@@ -51,8 +53,10 @@ offset_right = 120.0
 offset_bottom = 318.0
 text = ""
 horizontal_alignment = 1
-theme_override_font_sizes/font_size = 22
 theme_override_colors/font_color = Color(1, 1, 1, 0.32)
+theme_override_colors/font_outline_color = Color(0.05, 0.04, 0.09, 0.7)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 22
 
 [node name="WatchAdButton" type="Button" parent="UI"]
 anchors_preset = 8
