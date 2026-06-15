@@ -380,6 +380,27 @@ func _progression() -> float:
 func _wants_clear() -> bool:
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= CLEAR_DROUGHT
 
+# Fraction of the board currently filled (0..1).
+func _board_fill() -> float:
+	var n := 0
+	for r in GRID_ROWS:
+		for c in GRID_COLS:
+			if grid.cells[r][c] != null:
+				n += 1
+	return float(n) / float(GRID_ROWS * GRID_COLS)
+
+# Filler pool that adapts to coverage: roomy board → lean to big clean blocks (a
+# MIX, not a spam); as it fills, shift to smaller pieces so big blocks never clog.
+# Big blocks still come from board-clear gifts and line-completers, so no shape is
+# ever fully removed — they just taper as the board gets covered.
+func _fill_pool() -> Array:
+	var ratio := _board_fill()
+	if ratio < 0.30:
+		return CLEAN_SHAPES if randf() < 0.55 else EARLY_SHAPES
+	elif ratio < 0.52:
+		return CLEAN_SHAPES if randf() < 0.28 else EARLY_SHAPES
+	return EARLY_SHAPES
+
 # Early-game generosity fades GRADUALLY: 85% smart picks at move 0, easing
 # to 0% by move ~45. Smart picks complete lines (multi-line wins outright);
 # when nothing clears yet, hand out big "builder" pieces so the board fills
@@ -425,19 +446,19 @@ func _pick_shape() -> Array:
 	# DRAIN MODE (early game, or a board-clear drought): ONLY small pieces, strongly
 	# biased to completing lines, so the board drains toward a full clear.
 	if _wants_clear():
-		# Block-Blast-style opening: prefer (1) a one-piece board clear, then (2) a
-		# clean rectangle that completes a line, then (3) any clean rectangle that
-		# fits — big square tiles fill the board EVENLY and clear in big chunks,
-		# instead of odd shapes that leave a stray block (which blocks board clears).
+		# Helpful mix that ADAPTS to how full the board is: gift a one-piece board
+		# clear if possible, else a shape that completes a line, else a filler whose
+		# size scales with free space — bigger clean blocks while there's room, then
+		# smaller pieces as coverage rises so big blocks never clog the board.
 		var bc := _pick_board_clear_shape()
 		if not bc.is_empty():
 			return bc
-		var combo := _pick_combo_shape(CLEAN_SHAPES)
+		var combo := _pick_combo_shape()
 		if not combo.is_empty():
 			return combo
-		var rect := _pick_fitting(CLEAN_SHAPES)
-		if not rect.is_empty():
-			return rect
+		var fill := _pick_fitting(_fill_pool())
+		if not fill.is_empty():
+			return fill
 		return _pick_helpful_shape()
 	var smart_p : float = clampf(0.85 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.85)
 	if randf() < smart_p:
