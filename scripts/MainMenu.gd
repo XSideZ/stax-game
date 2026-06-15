@@ -15,8 +15,9 @@ const COLORS: Array = [
 const ORB_COUNT := 10
 const FALL_COUNT := 12
 
-# ── Dev skin changer — set to false before publishing to hide it ─────────────
-const SHOW_SKIN_PICKER := true
+# ── Dev skin changer — hidden by default; revealed via the secret tap sequence
+# (tap each letter twice, backwards: X X A A T T S S). Force-on with `true`. ────
+const SHOW_SKIN_PICKER := false
 const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 	"CANDY", "FROST", "GRASS", "WATER", "LAVA", "WOOD", "GALAXY",
 	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO",
@@ -30,6 +31,10 @@ var time_t  : float = 0.0
 var letters      : Array = []   # {lbl, base_pos, phase}
 var bobbing      : bool  = false
 var cat_progress : int   = 0    # secret: tap S-T-A-X in order to toggle cat mode
+# secret dev-skins reveal: tap each letter twice, backwards — X X A A T T S S
+const DEV_SEQUENCE : Array = [3, 3, 2, 2, 1, 1, 0, 0]
+var dev_progress : int   = 0
+var dev_skins_shown : bool = false
 var settings_box : PanelContainer
 var play_pulse   : Tween
 var faller_layer : Node2D
@@ -201,6 +206,24 @@ func _on_letter_tapped(idx: int) -> void:
 	else:
 		# Wrong order — start over (but a first-letter tap still counts)
 		cat_progress = 1 if idx == 0 else 0
+
+	# Secret dev-skins sequence (tracked independently of the cat one)
+	if idx == DEV_SEQUENCE[dev_progress]:
+		dev_progress += 1
+		if dev_progress >= DEV_SEQUENCE.size():
+			dev_progress = 0
+			_reveal_dev_skins()
+	else:
+		dev_progress = 1 if idx == DEV_SEQUENCE[0] else 0
+
+func _reveal_dev_skins() -> void:
+	if dev_skins_shown:
+		return
+	dev_skins_shown = true
+	_build_skin_picker()
+	Sfx.play_best()
+	if GameState.haptics_on:
+		Input.vibrate_handheld(40)
 
 func _toggle_cat_mode() -> void:
 	# The bg, orbs and falling pieces all read the skin live each frame, so the

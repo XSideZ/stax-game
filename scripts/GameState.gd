@@ -160,6 +160,10 @@ func next_auto_theme(current: int) -> int:
 # so a strong 15k game pays ~60 and a great 100k run ~400. Hard achievements
 # stay the big chunks — levelling is gated by skill, not time spent.
 const MAX_LEVEL := 100
+# Bump this to force a one-time progress wipe for everyone on the next update:
+# on load, a save with an older epoch is reset to a fresh level 1 (settings kept).
+const RESET_EPOCH := 1
+var save_epoch : int = 0
 var player_name  : String = ""
 var player_xp    : int = 0
 var games_played : int = 0
@@ -522,6 +526,30 @@ func clear_run() -> void:
 		if d != null:
 			d.remove("stax_run.dat")
 
+# Wipe progression to a fresh level 1, keeping only settings + player name.
+func _reset_progress() -> void:
+	best_score = 0
+	scores = []
+	theme_idx = 0
+	total_lines = 0
+	player_xp = 0
+	games_played = 0
+	unlocked = {}
+	total_score = 0
+	stat_blocks = 0
+	stat_best_streak = 0
+	stat_run_lines = 0
+	stat_board_clears = 0
+	stat_best_multi = 0
+	stat_revives = 0
+	stat_powers_used = 0
+	cat_mode = false
+	theme_bag = []
+	skins_seen = []
+	picked_skin = -1
+	skin_locked = false
+	dev_skin_override = -1
+
 # ── Settings / meta persistence ───────────────────────────────────────────────
 func _save() -> void:
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -551,6 +579,7 @@ func _save() -> void:
 	f.store_var(skins_seen)
 	f.store_var(picked_skin)
 	f.store_var(skin_locked)
+	f.store_var(save_epoch)
 	f.close()
 
 func _load() -> void:
@@ -606,4 +635,12 @@ func _load() -> void:
 		picked_skin = f.get_var()
 	if f.get_position() < f.get_length():
 		skin_locked = f.get_var()
+	if f.get_position() < f.get_length():
+		save_epoch = f.get_var()
 	f.close()
+	# One-time global reset after the XP rework — anyone on an older epoch starts
+	# fresh at level 1 (settings + name kept).
+	if save_epoch < RESET_EPOCH:
+		_reset_progress()
+		save_epoch = RESET_EPOCH
+		_save()
