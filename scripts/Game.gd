@@ -257,7 +257,6 @@ func _ready() -> void:
 		_spawn_pieces()
 	_refresh_best()
 	Sfx.update_music()
-	_add_dev_clear_button()
 	if GameState.tutorial_active:
 		_start_tutorial()
 
@@ -2117,21 +2116,6 @@ func _draw_fx_layer() -> void:
 			"laser_fire":   _fx_laser_fire(e, p)
 			"gravity":      _fx_gravity(e, p)
 			"pixel_art":    _fx_pixel_art(e, p)
-
-# ── TEMP dev tool: button that simulates a board clear to test the clear FX ────
-func _add_dev_clear_button() -> void:
-	var b := Button.new()
-	b.text = "CLEAR"
-	b.position = Vector2(330, 90)
-	b.size = Vector2(80, 32)
-	b.add_theme_font_size_override("font_size", 13)
-	ui.add_child(b)
-	b.pressed.connect(_dev_test_board_clear)
-
-func _dev_test_board_clear() -> void:
-	Sfx.play_board_clear()
-	_show_board_clear_popup()
-	_trigger_board_clear_fx()
 
 # Board-clear flourish: the WHOLE board fills with a colourful pixel pattern made
 # of the CURRENT skin's own blocks (every skin gets it for free), held a beat,
