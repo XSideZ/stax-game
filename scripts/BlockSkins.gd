@@ -475,6 +475,8 @@ static func _frost(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 # ── 7 GRASS ───────────────────────────────────────────────────────────────────
 # Grass tones: greens with the occasional pink — replaces the muddy grey/brown the
 # old col.lerp produced for the grey/orange pieces. Picked per piece-colour.
+# Wildflower-meadow palette: greens dominate, with a harmonious spread of SOFT
+# pastels so colour blocks read as a flowery patchwork, not jarring pink spots.
 const GRASS_TONES : Array = [
 	Color(0.38, 0.78, 0.42),   # green
 	Color(0.45, 0.81, 0.44),   # green
@@ -482,7 +484,13 @@ const GRASS_TONES : Array = [
 	Color(0.52, 0.83, 0.47),   # bright green
 	Color(0.41, 0.77, 0.50),   # mint green
 	Color(0.48, 0.80, 0.40),   # lime green
-	Color(0.93, 0.58, 0.81),   # soft pink (occasional accent)
+	Color(0.58, 0.82, 0.52),   # soft yellow-green
+	Color(0.35, 0.74, 0.57),   # teal-green
+	Color(0.44, 0.79, 0.46),   # green
+	Color(0.87, 0.68, 0.79),   # soft pink
+	Color(0.78, 0.76, 0.91),   # soft lavender
+	Color(0.91, 0.86, 0.62),   # soft buttercup
+	Color(0.56, 0.85, 0.77),   # soft turquoise
 ]
 
 static func _grass(ci: CanvasItem, r: Rect2, _col: Color, s: float, rad: float, seed_v: int, glow: float = 0.0) -> void:
