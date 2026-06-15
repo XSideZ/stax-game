@@ -156,6 +156,7 @@ var drag_pop_t    : float   = 0.0    # pickup swell on the dragged piece
 var meter       : float = 0.0     # charge 0..1
 var power_busy  : bool  = false   # an ability animation is playing
 var power_pulse : float = 0.0     # orb flash right after firing
+var _icon_font : Font = load("res://assets/fonts/baloo2_semibold.tres")  # for the "×2" power-icon label
 var last_power_tier : int = 0     # detect crossing into a new ability tier
 var fx_layer    : Node2D          # top layer for bomb/laser/gravity effects
 var effects     : Array = []      # active visual effects
@@ -1952,14 +1953,16 @@ func _draw_power_icon(c: Vector2, tier: int, icol: Color, pulse: float) -> void:
 				draw_line(c + dir * 4.0, c + dir * 6.5 - perp * 2.6, Color(1.0, 0.9, 0.5), 2.0)
 			draw_circle(c, 2.6 + pulse * 1.6, Color(1, 1, 1, 0.95))
 		2:
-			# Twin bomb: two small bombs side by side, each with a fuse spark
-			for off : float in [-5.0, 5.0]:
-				var bc := c + Vector2(off, 2.5)
-				draw_circle(bc, 5.0, Color(0.10, 0.10, 0.15))
-				draw_arc(bc, 5.0, 0, TAU, 16, icol, 1.8, true)
-				draw_circle(bc + Vector2(-1.6, -0.6), 1.1, Color(icol.r, icol.g, icol.b, 0.6))
-				draw_line(bc + Vector2(2.4, -3.4), bc + Vector2(4.2, -6.6), icol, 1.6)
-				draw_circle(bc + Vector2(4.2, -6.6), 1.4 + 0.4 * pulse, Color(1.0, 0.8, 0.3, 0.55 + 0.35 * pulse))
+			# Twin bomb: one bomb (like tier 1) + a "×2" badge — reads instantly
+			var bp := c + Vector2(-5.0, 2.5)
+			draw_circle(bp, 7.0, Color(0.10, 0.10, 0.15))
+			draw_arc(bp, 7.0, 0, TAU, 18, icol, 2.0, true)
+			draw_circle(bp + Vector2(-2.2, -0.5), 1.5, Color(icol.r, icol.g, icol.b, 0.6))
+			draw_line(bp + Vector2(3.4, -4.2), bp + Vector2(5.6, -8.8), icol, 1.8)
+			draw_circle(bp + Vector2(5.6, -8.8), 1.8 + 0.4 * pulse, Color(1.0, 0.8, 0.3, 0.55 + 0.35 * pulse))
+			if _icon_font:
+				draw_string(_icon_font, c + Vector2(3.5, 7.0), "×2",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 14, icol)
 		_:
 			# Bomb (tier 0 dim, tier 1 lit): round body, fuse + spark
 			draw_circle(c + Vector2(0, 2), 8.0, Color(0.10, 0.10, 0.15))
