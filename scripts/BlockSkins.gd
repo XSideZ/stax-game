@@ -473,10 +473,22 @@ static func _frost(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 	rr_outline(ci, r, rad, ice.lightened(0.55), 1.5)
 
 # ── 7 GRASS ───────────────────────────────────────────────────────────────────
+# Grass tones: greens with the occasional pink — replaces the muddy grey/brown the
+# old col.lerp produced for the grey/orange pieces. Picked per piece-colour.
+const GRASS_TONES : Array = [
+	Color(0.36, 0.80, 0.40),   # fresh green
+	Color(0.52, 0.83, 0.40),   # lime green
+	Color(0.30, 0.70, 0.44),   # deep green
+	Color(0.62, 0.86, 0.50),   # spring green
+	Color(0.93, 0.58, 0.80),   # soft pink
+	Color(0.46, 0.80, 0.56),   # mint green
+]
+
 static func _grass(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var g := col.lerp(Color(0.30, 0.78, 0.30), 0.50)
+	var key := int(col.r * 311.0 + col.g * 523.0 + col.b * 727.0)
+	var g : Color = GRASS_TONES[key % GRASS_TONES.size()]
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
-	rr_grad(ci, r, rad, g.lightened(0.25), g.darkened(0.30))
+	rr_grad(ci, r, rad, g.lightened(0.25), g.darkened(0.28))
 	var t := Time.get_ticks_msec() * 0.001
 	var n_blades := 6
 	for i in n_blades:
@@ -490,17 +502,34 @@ static func _grass(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 			Vector2(bx + lean, r.position.y + s * 0.20 - bh),
 			Vector2(bx + s * 0.045, r.position.y + s * 0.20)]),
 			PackedColorArray([g.lightened(0.35 if i % 2 == 0 else 0.15)]))
+	# Pollen speckles
 	for i in 3:
 		var px : float = r.position.x + s * 0.14 + float((seed_v * 31 + i * 53) % 100) / 100.0 * (r.size.x - s * 0.28)
 		var py : float = r.position.y + r.size.y * 0.45 + float((seed_v * 17 + i * 29) % 100) / 100.0 * (r.size.y * 0.4)
 		ci.draw_circle(Vector2(px, py), s * 0.034, g.lightened(0.40))
-	if seed_v % 7 == 0:
-		var fp := r.position + r.size * Vector2(0.68, 0.62)
-		for i in 5:
-			var a := float(i) / 5.0 * TAU
-			ci.draw_circle(fp + Vector2(cos(a), sin(a)) * s * 0.068, s * 0.045, Color(1, 1, 1, 0.85))
-		ci.draw_circle(fp, s * 0.04, Color(0.98, 0.85, 0.25))
+	_grass_flowers(ci, r, s, seed_v)
 	rr_outline(ci, r, rad, g.darkened(0.35), 1.5)
+
+# Flowers: varied colour + position, on many (not all) blocks — denser than the old
+# 1-in-7-at-a-fixed-spot version.
+static func _grass_flowers(ci: CanvasItem, r: Rect2, s: float, seed_v: int) -> void:
+	var fcols : Array = [
+		Color(1, 1, 1), Color(1.0, 0.74, 0.86), Color(1.0, 0.55, 0.74),
+		Color(0.80, 0.66, 1.0), Color(1.0, 0.82, 0.45),
+	]
+	var count := 0
+	if seed_v % 5 < 2: count = 1          # ~40% of blocks get a flower
+	if seed_v % 5 == 0: count = 2          # ~20% get a second one
+	for f in count:
+		var sv := seed_v * (f + 1) * 41 + f * 17
+		var fcol : Color = fcols[sv % fcols.size()]
+		var fp := r.position + Vector2(s * (0.20 + float(sv % 60) / 100.0),
+			s * (0.20 + float((sv / 7) % 60) / 100.0))
+		var pr : float = s * (0.045 + float(sv % 3) * 0.006)
+		for i in 5:
+			var a := float(i) / 5.0 * TAU + float(sv % 6)
+			ci.draw_circle(fp + Vector2(cos(a), sin(a)) * pr * 1.5, pr, fcol)
+		ci.draw_circle(fp, pr * 0.85, Color(0.98, 0.85, 0.25))
 
 # ── 8 WATER (animated) ────────────────────────────────────────────────────────
 static func _water(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
