@@ -770,7 +770,7 @@ func _end_drag(pos: Vector2) -> void:
 	var color : Color    = pieces[dragging_slot].color
 	var snap  : Vector2i = _best_snap(lifted, shape)
 
-	if grid.can_place(shape, snap.y, snap.x):
+	if _drop_targets_board(pos) and grid.can_place(shape, snap.y, snap.x):
 		grid.place(shape, snap.y, snap.x, color, pieces[dragging_slot].get("pattern", 0))
 		placed[dragging_slot] = true
 		Sfx.play_place()
@@ -846,7 +846,7 @@ func _end_drag(pos: Vector2) -> void:
 			_game_over()
 
 		_save_run()
-	elif _is_over_grid(lifted):
+	elif _drop_targets_board(pos):
 		Sfx.play_invalid()
 		_buzz(25)
 
@@ -1077,6 +1077,11 @@ func _apply_block_style() -> void:
 
 func _update_ghost() -> void:
 	if dragging_slot < 0 or placed[dragging_slot]:
+		return
+	# Off the board (or finger in the tray) → hide the ghost so it's clear it won't place
+	if not _drop_targets_board(drag_pos):
+		grid.clear_ghost()
+		last_hover_valid = false
 		return
 	var shape : Array    = pieces[dragging_slot].shape
 	var snap  : Vector2i = _best_snap(drag_pos + Vector2(0, -DRAG_LIFT), shape)
@@ -2157,8 +2162,19 @@ func _draw_styled_block(r: Rect2, col: Color, seed_v: int = 0) -> void:
 	BlockSkins.paint(self, grid.block_style, r, col, seed_v)
 
 func _is_over_grid(pos: Vector2) -> bool:
-	return pos.x >= GRID_X and pos.x <= GRID_X + GRID_COLS * GRID_STEP \
-		and pos.y >= GRID_Y and pos.y <= GRID_Y + GRID_ROWS * GRID_STEP
+	var m := GRID_STEP * 0.5   # small overhang tolerance at the edges
+	return pos.x >= GRID_X - m and pos.x <= GRID_X + GRID_COLS * GRID_STEP + m \
+		and pos.y >= GRID_Y - m and pos.y <= GRID_Y + GRID_ROWS * GRID_STEP + m
+
+# A release should only PLACE when the shape is over the board AND the finger
+# isn't down in the tray zone (releasing there means "put it back / swap another").
+# The drag-lift floats the shape above the finger, so both checks matter — without
+# the tray check, a swap-release auto-places because the lifted shape still overlaps
+# the board.
+func _drop_targets_board(finger: Vector2) -> bool:
+	if finger.y >= TRAY_Y:
+		return false
+	return _is_over_grid(finger + Vector2(0, -DRAG_LIFT))
 
 # ── Score popups ──────────────────────────────────────────────────────────────
 func _show_score_popup(amount: int, cleared_lines: int, multiplier: int) -> void:
