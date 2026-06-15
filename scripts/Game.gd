@@ -106,11 +106,11 @@ const DRAG_LIFT := 70.0
 # exactly where it lands, so over-reach stays visible before releasing.
 const SNAP_REACH := 4
 
-# Hysteresis (in cells) for the snap anchor: once locked to a cell, the piece HOLDS
-# there until the finger pushes this far past the cell edge — stops it flipping on a
-# 1-2px nudge across a boundary. Higher = stickier lock.
-const SNAP_HYST := 0.34
-var snap_anchor := Vector2i(-999, -999)   # last locked finger-cell (drag hysteresis)
+# Hysteresis (in cells) for snap placement: once locked, the piece HOLDS its cell
+# until the finger pushes this far past the half-cell switch point — symmetric on
+# every side, so it stops flipping on a 1-2px nudge. Higher = stickier lock.
+const SNAP_HYST := 0.25
+var snap_anchor := Vector2i(-999, -999)   # last locked PLACEMENT cell (drag hysteresis)
 
 # ── Power meter ───────────────────────────────────────────────────────────────
 # One charge bar fills from clears. Spend it (tap the orb) on the best ability
@@ -1099,11 +1099,18 @@ func _get_snap(pos: Vector2, shape: Array) -> Vector2i:
 		if (cell[0] as int) > max_c: max_c = cell[0]
 		if (cell[1] as int) < min_r: min_r = cell[1]
 		if (cell[1] as int) > max_r: max_r = cell[1]
-	var gc := _anchor_cell(pos)
-	return Vector2i(
-		gc.x - roundi((min_c + max_c) / 2.0),
-		gc.y - roundi((min_r + max_r) / 2.0)
-	)
+	# Centre the shape's bounding box on the (lifted) finger point — matching how the
+	# dragged piece is drawn — then round with symmetric hysteresis. Accounts for the
+	# DRAG_LIFT offset because `pos` is already the lifted point.
+	var cx : float = (float(min_c) + float(max_c)) * 0.5
+	var cy : float = (float(min_r) + float(max_r)) * 0.5
+	var fx : float = (pos.x - GRID_X) / GRID_STEP - cx - 0.5
+	var fy : float = (pos.y - GRID_Y) / GRID_STEP - cy - 0.5
+	var fresh : bool = snap_anchor.x < -900
+	var pc : int = _hyst_round(fx, snap_anchor.x, fresh)
+	var pr : int = _hyst_round(fy, snap_anchor.y, fresh)
+	snap_anchor = Vector2i(pc, pr)
+	return Vector2i(pc, pr)
 
 # Generous snap: if the raw cell isn't placeable, fall to the nearest placeable
 # spot within ±SNAP_REACH cells so the shadow forgives near-misses on fast play.
@@ -1122,23 +1129,16 @@ func _best_snap(pos: Vector2, shape: Array) -> Vector2i:
 					best = Vector2i(base.x + dc, base.y + dr)
 	return best
 
-# Which grid cell the (lifted) finger maps to, WITH hysteresis so the snap LOCKS:
-# once on a cell it holds until the finger pushes SNAP_HYST past the cell edge,
-# instead of flipping the instant you cross a boundary (the 1-2px swap Jay saw).
-func _anchor_cell(pos: Vector2) -> Vector2i:
-	var gx := (pos.x - GRID_X) / GRID_STEP
-	var gy := (pos.y - GRID_Y) / GRID_STEP
-	if snap_anchor.x < -900:
-		snap_anchor = Vector2i(floori(gx), floori(gy))
-		return snap_anchor
-	var ax := snap_anchor.x
-	var ay := snap_anchor.y
-	if gx >= float(ax) + 1.0 + SNAP_HYST or gx < float(ax) - SNAP_HYST:
-		ax = floori(gx)
-	if gy >= float(ay) + 1.0 + SNAP_HYST or gy < float(ay) - SNAP_HYST:
-		ay = floori(gy)
-	snap_anchor = Vector2i(ax, ay)
-	return snap_anchor
+# Round f to the nearest cell, but HOLD the previous placement until f moves
+# SNAP_HYST past the half-cell switch point — symmetric on all sides.
+func _hyst_round(f: float, prev: int, fresh: bool) -> int:
+	if fresh:
+		return roundi(f)
+	if f >= float(prev) + 0.5 + SNAP_HYST:
+		return roundi(f)
+	if f < float(prev) - 0.5 - SNAP_HYST:
+		return roundi(f)
+	return prev
 
 func _screen_to_grid(pos: Vector2) -> Vector2i:
 	return Vector2i(
