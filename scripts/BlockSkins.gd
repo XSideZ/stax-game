@@ -120,7 +120,7 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		4:  _crystal(ci, r, col, s, rad, seed_v)
 		5:  _candy(ci, r, col, s, rad, seed_v)
 		6:  _frost(ci, r, col, s, rad, seed_v)
-		7:  _grass(ci, r, col, s, rad, seed_v)
+		7:  _grass(ci, r, col, s, rad, seed_v, glow)
 		8:  _water(ci, r, col, s, rad, seed_v)
 		9:  _lava(ci, r, col, s, rad, seed_v)
 		10: _wood(ci, r, col, s, rad, seed_v)
@@ -476,17 +476,21 @@ static func _frost(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 # Grass tones: greens with the occasional pink — replaces the muddy grey/brown the
 # old col.lerp produced for the grey/orange pieces. Picked per piece-colour.
 const GRASS_TONES : Array = [
-	Color(0.36, 0.80, 0.40),   # fresh green
-	Color(0.52, 0.83, 0.40),   # lime green
-	Color(0.30, 0.70, 0.44),   # deep green
-	Color(0.62, 0.86, 0.50),   # spring green
-	Color(0.93, 0.58, 0.80),   # soft pink
-	Color(0.46, 0.80, 0.56),   # mint green
+	Color(0.38, 0.78, 0.42),   # green
+	Color(0.45, 0.81, 0.44),   # green
+	Color(0.33, 0.72, 0.44),   # deep green
+	Color(0.52, 0.83, 0.47),   # bright green
+	Color(0.41, 0.77, 0.50),   # mint green
+	Color(0.48, 0.80, 0.40),   # lime green
+	Color(0.93, 0.58, 0.81),   # soft pink (occasional accent)
 ]
 
-static func _grass(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:
-	var key := int(col.r * 311.0 + col.g * 523.0 + col.b * 727.0)
-	var g : Color = GRASS_TONES[key % GRASS_TONES.size()]
+static func _grass(ci: CanvasItem, r: Rect2, _col: Color, s: float, rad: float, seed_v: int, glow: float = 0.0) -> void:
+	# Tone keyed off the stable per-cell seed (NOT col): col pulses during the clear
+	# preview, which made a colour-hash flicker between palette entries every frame.
+	var g : Color = GRASS_TONES[posmod(seed_v, GRASS_TONES.size())]
+	if glow > 0.0:
+		g = g.lightened(glow * 0.40)   # clear-preview highlight (was carried by the pulsing col)
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
 	rr_grad(ci, r, rad, g.lightened(0.25), g.darkened(0.28))
 	var t := Time.get_ticks_msec() * 0.001
