@@ -45,7 +45,6 @@ var last_place_center := Vector2.ZERO
 var frame_pulse : float = 0.0
 var frame_rect : ColorRect          # GPU-shader layer for the animated border
 var frame_mat  : ShaderMaterial
-var drag_layer : Node2D             # draws ghost cells above the frame border
 
 func _bump_frame(strong: bool) -> void:
 	frame_pulse = maxf(frame_pulse, 1.5 if strong else 0.85)
@@ -85,11 +84,6 @@ func _ready() -> void:
 	frame_rect.position = Vector2(BOARD_SPAN * 0.5 - fs * 0.5, BOARD_SPAN * 0.5 - fs * 0.5)
 	frame_rect.z_index = 1
 	add_child(frame_rect)
-
-	drag_layer = Node2D.new()
-	drag_layer.z_index = 2
-	drag_layer.draw.connect(func(): _draw_ghost_cells_on(drag_layer))
-	add_child(drag_layer)
 
 func _process(delta: float) -> void:
 	var needs_redraw := false
@@ -160,19 +154,6 @@ func _draw() -> void:
 	if clearing:
 		_draw_clear_pop()
 
-func _draw_ghost_cells_on(layer: Node2D) -> void:
-	for gv in ghost_cells:
-		var c_idx := gv.x
-		var r_idx := gv.y
-		var rect := Rect2(c_idx * STEP, r_idx * STEP, CELL, CELL)
-		var in_preview := preview_cells.has(gv)
-		var ga := 0.42 if in_preview else 0.30
-		var pts := _rounded_points(rect, RAD)
-		layer.draw_polygon(pts, PackedColorArray([Color(ghost_color.r, ghost_color.g, ghost_color.b, ga)]))
-		var outline := _rounded_points(rect, RAD)
-		outline.append(outline[0])
-		layer.draw_polyline(outline, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.75), 1.5)
-
 func _draw_cell(r: int, c: int) -> void:
 	var rect := Rect2(c * STEP, r * STEP, CELL, CELL)
 	var col  : Color = cells[r][c] if cells[r][c] != null else Color.TRANSPARENT
@@ -182,7 +163,11 @@ func _draw_cell(r: int, c: int) -> void:
 	var in_preview := preview_cells.has(gv)
 
 	if col == Color.TRANSPARENT:
-		if not ghost_cells.has(gv):
+		if ghost_cells.has(gv):
+			var ga := 0.42 if in_preview else 0.30
+			_rounded_rect(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, ga))
+			_rounded_outline(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.75), 1.5)
+		else:
 			_rounded_rect(rect, RAD, Color(0.13, 0.11, 0.19))
 			_rounded_outline(rect, RAD, Color(0.24, 0.20, 0.32), 1.0)
 		return
@@ -466,14 +451,12 @@ func set_ghost(shape: Array, row: int, col: int, color: Color) -> void:
 	preview_cells = get_completed_lines(shape, row, col)
 	preview_color = color
 	queue_redraw()
-	drag_layer.queue_redraw()
 
 func clear_ghost() -> void:
 	if not ghost_cells.is_empty() or not preview_cells.is_empty():
 		ghost_cells   = []
 		preview_cells = []
 		queue_redraw()
-		drag_layer.queue_redraw()
 
 func can_any_fit(pieces: Array, placed: Array) -> bool:
 	for i in pieces.size():
