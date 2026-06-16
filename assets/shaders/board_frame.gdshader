@@ -31,8 +31,9 @@ void fragment() {
 	vec3 col = mix(dim, hot, wave);
 
 	float th = u_thickness * (1.0 + u_pulse * 0.5);
-	// Crisp rim centred on the rounded edge (d=0), AA'd by the SDF
-	float rim = 1.0 - smoothstep(th, th + 2.0, abs(d));
+	// Rim drawn outward only — multiplying by smoothstep(-th, 0, d) fades it
+	// to zero before it reaches the board interior, so blocks aren't covered.
+	float rim = (1.0 - smoothstep(th, th + 2.0, abs(d))) * smoothstep(-th, 0.0, d);
 	// Outward glow only (d>0), blooms on a clear
 	float glow = exp(-max(d, 0.0) * 0.07) * step(0.0, d) * (0.30 + u_pulse * 0.65);
 
