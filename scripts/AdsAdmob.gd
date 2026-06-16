@@ -4,12 +4,12 @@ extends Node
 # Studios addon (res://addons/admob/). NEVER preload/reference this script
 # statically: Ads.gd load()s it at runtime only when the addon is installed.
 #
-# Unit IDs below are Google's OFFICIAL TEST IDs — safe to ship to TestFlight.
-# Swap in the real ones from the AdMob console before App Store release.
+# iOS rewarded unit ID is LIVE (production). iOS interstitial + both Android
+# unit IDs are still Google test IDs — replace before Android release.
 
 const REWARDED_UNIT := {
-	"iOS":     "ca-app-pub-3940256099942544/1712485313",   # TEST — replace
-	"Android": "ca-app-pub-3940256099942544/5224354917",   # TEST — replace
+	"iOS":     "ca-app-pub-8118111609250042/5979726199",
+	"Android": "ca-app-pub-3940256099942544/5224354917",   # TEST — replace with Android unit ID
 }
 const INTERSTITIAL_UNIT := {
 	"iOS":     "ca-app-pub-3940256099942544/4411468910",   # TEST — replace
