@@ -14,6 +14,8 @@ config/name="STAX"
 config/version="2.0.0"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
+boot_splash/bg_color=Color(0.039216, 0.031373, 0.078431, 1)
+boot_splash/show_image=false
 config/icon="res://icon.svg"
 
 [autoload]
@@ -40,3 +42,4 @@ theme/custom_font="res://assets/fonts/baloo2_semibold.tres"
 [rendering]
 
 renderer/rendering_method="mobile"
+environment/defaults/default_clear_color=Color(0.039216, 0.031373, 0.078431, 1)
