@@ -82,7 +82,8 @@ func _ready() -> void:
 	frame_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	frame_rect.size = Vector2(fs, fs)
 	frame_rect.position = Vector2(BOARD_SPAN * 0.5 - fs * 0.5, BOARD_SPAN * 0.5 - fs * 0.5)
-	frame_rect.z_index = 1
+	frame_rect.z_index = -1
+	frame_rect.show_behind_parent = true
 	add_child(frame_rect)
 
 func _process(delta: float) -> void:
