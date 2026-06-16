@@ -231,19 +231,21 @@ func _squash_scale(t: float) -> Vector2:
 		return Vector2(lerpf(1.06, 1.0, k), lerpf(0.95, 1.0, k))
 
 # ── Rounded drawing helpers ───────────────────────────────────────────────────
+# Reuse BlockSkins' precomputed 16 corner unit-directions (no per-call cos/sin).
+# Hot: every empty board cell draws a rounded fill + outline each redraw.
 func _rounded_points(r: Rect2, rad: float) -> PackedVector2Array:
 	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
+	var c0 := Vector2(r.position.x + rad, r.position.y + rad)
+	var c1 := Vector2(r.end.x - rad,      r.position.y + rad)
+	var c2 := Vector2(r.end.x - rad,      r.end.y - rad)
+	var c3 := Vector2(r.position.x + rad, r.end.y - rad)
 	var pts := PackedVector2Array()
-	var corners := [
-		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
-		[Vector2(r.end.x - rad, r.position.y + rad),          PI * 1.5,  TAU],
-		[r.end - Vector2(rad, rad),                           0.0,       PI * 0.5],
-		[Vector2(r.position.x + rad, r.end.y - rad),          PI * 0.5,  PI],
-	]
-	for cn in corners:
-		for i in 4:
-			var a : float = lerpf(cn[1], cn[2], float(i) / 3.0)
-			pts.append(cn[0] + Vector2(cos(a), sin(a)) * rad)
+	pts.resize(16)
+	for i in 4:
+		pts[i]      = c0 + BlockSkins._RR_UNIT[i] * rad
+		pts[4 + i]  = c1 + BlockSkins._RR_UNIT[4 + i] * rad
+		pts[8 + i]  = c2 + BlockSkins._RR_UNIT[8 + i] * rad
+		pts[12 + i] = c3 + BlockSkins._RR_UNIT[12 + i] * rad
 	return pts
 
 func _rounded_rect(r: Rect2, rad: float, col: Color) -> void:

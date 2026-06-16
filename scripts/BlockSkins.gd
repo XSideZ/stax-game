@@ -37,6 +37,24 @@ const OVERLAY_STYLES : Array = [12, 18]
 # churn that caused occasional hitches). draw_polygon copies it on submit, so
 # reusing one shared buffer is safe.
 static var _cbuf : PackedColorArray = PackedColorArray([Color(1, 1, 1, 1)])
+# Reused per-vertex colour buffers for rr_grad / draw_poly_safe — same churn
+# avoidance. Resized only when the vertex count changes, then filled in place.
+static var _gradbuf : PackedColorArray = PackedColorArray()
+static var _tribuf  : PackedColorArray = PackedColorArray()
+
+# The 16 rounded-corner unit directions are CONSTANT — precomputed once so
+# rr_points() is pure add/multiply instead of 16 cos + 16 sin per call (it runs
+# ~4× per cell × 64 cells every redraw). Order: TL, TR, BR, BL corners, 4 pts
+# each, matching the original lerp(angle) sweep exactly.
+# static var (not const): a PackedVector2Array literal isn't a constant
+# expression, but a static var is built once at class load and is just as
+# shareable across scripts (BlockSkins._RR_UNIT).
+static var _RR_UNIT : PackedVector2Array = PackedVector2Array([
+	Vector2(-1.0, 0.0), Vector2(-0.8660254, -0.5), Vector2(-0.5, -0.8660254), Vector2(0.0, -1.0),
+	Vector2(0.0, -1.0), Vector2(0.5, -0.8660254), Vector2(0.8660254, -0.5), Vector2(1.0, 0.0),
+	Vector2(1.0, 0.0), Vector2(0.8660254, 0.5), Vector2(0.5, 0.8660254), Vector2(0.0, 1.0),
+	Vector2(0.0, 1.0), Vector2(-0.5, 0.8660254), Vector2(-0.8660254, 0.5), Vector2(-1.0, 0.0),
+])
 
 # 8x8 pixel sprites for the RETRO skin ('X' = filled). Shading is automatic:
 # top-edge pixels get lit, bottom-edge pixels get shaded, plus a black outline.
@@ -190,10 +208,19 @@ static func draw_poly_safe(ci: CanvasItem, pts: PackedVector2Array, col: Color, 
 		_cbuf[0] = col
 		ci.draw_polygon(pts, _cbuf)
 		return
-	if Geometry2D.triangulate_polygon(pts).is_empty():
+	# Triangulate ONCE and submit the indexed triangles directly. draw_polygon
+	# would triangulate a second time internally, so this halves the per-poly
+	# triangulation cost for the continuous-pattern skins (petals, ribbons,
+	# veins) that draw many clipped polys per cell every frame. Same skip
+	# behaviour on degenerate input (empty index list = nothing drawn).
+	var idx := Geometry2D.triangulate_polygon(pts)
+	if idx.is_empty():
 		return
-	_cbuf[0] = col
-	ci.draw_polygon(pts, _cbuf)
+	var n := pts.size()
+	if _tribuf.size() != n:
+		_tribuf.resize(n)
+	_tribuf.fill(col)
+	RenderingServer.canvas_item_add_triangle_array(ci.get_canvas_item(), idx, pts, _tribuf)
 
 static func _inside_edge(p: Vector2, r: Rect2, e: int) -> bool:
 	match e:
@@ -224,17 +251,18 @@ static func rr_points(r: Rect2, rad: float) -> PackedVector2Array:
 	# half the dimension makes opposite corner arcs share a point, producing a
 	# degenerate polygon that fails triangulation (e.g. candy's thin gloss bar).
 	rad = minf(rad, maxf((minf(r.size.x, r.size.y) - 1.0) * 0.5, 0.0))
+	# Corner centres: TL, TR, BR, BL (4 arc points each, from the const dirs)
+	var c0 := Vector2(r.position.x + rad, r.position.y + rad)
+	var c1 := Vector2(r.end.x - rad,      r.position.y + rad)
+	var c2 := Vector2(r.end.x - rad,      r.end.y - rad)
+	var c3 := Vector2(r.position.x + rad, r.end.y - rad)
 	var pts := PackedVector2Array()
-	var corners := [
-		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
-		[Vector2(r.end.x - rad, r.position.y + rad),          PI * 1.5,  TAU],
-		[r.end - Vector2(rad, rad),                           0.0,       PI * 0.5],
-		[Vector2(r.position.x + rad, r.end.y - rad),          PI * 0.5,  PI],
-	]
-	for cn in corners:
-		for i in 4:
-			var a : float = lerpf(cn[1], cn[2], float(i) / 3.0)
-			pts.append(cn[0] + Vector2(cos(a), sin(a)) * rad)
+	pts.resize(16)
+	for i in 4:
+		pts[i]      = c0 + _RR_UNIT[i] * rad
+		pts[4 + i]  = c1 + _RR_UNIT[4 + i] * rad
+		pts[8 + i]  = c2 + _RR_UNIT[8 + i] * rad
+		pts[12 + i] = c3 + _RR_UNIT[12 + i] * rad
 	return pts
 
 # Degenerate guard: rects under ~6px collapse the corner arcs into invalid
@@ -258,11 +286,14 @@ static func rr_grad(ci: CanvasItem, r: Rect2, rad: float, top_col: Color, bot_co
 	if r.size.x < 6.0 or r.size.y < 6.0:
 		ci.draw_rect(r, top_col.lerp(bot_col, 0.5), true)
 		return
-	var pts  := rr_points(r, rad)
-	var cols := PackedColorArray()
-	for p in pts:
-		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
-	ci.draw_polygon(pts, cols)
+	var pts := rr_points(r, rad)
+	var n := pts.size()
+	if _gradbuf.size() != n:
+		_gradbuf.resize(n)
+	var inv_h := 1.0 / r.size.y
+	for i in n:
+		_gradbuf[i] = top_col.lerp(bot_col, clampf((pts[i].y - r.position.y) * inv_h, 0.0, 1.0))
+	ci.draw_polygon(pts, _gradbuf)
 
 # ── 0 PASTEL ──────────────────────────────────────────────────────────────────
 static func _pastel(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float) -> void:

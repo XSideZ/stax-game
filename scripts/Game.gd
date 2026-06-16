@@ -210,6 +210,11 @@ var _was_power_busy : bool  = false   # detect when a fired power finishes resol
 # Idle background redraws throttle to ~30fps (perf: the parallax skins are the
 # heavy per-frame cost on mobile). Any gameplay action redraws at full 60fps.
 var _idle_redraw_accum : float = 0.0
+# Reused colour buffer for the UI _rr_grad helper — avoids a per-call alloc.
+var _ui_gradbuf : PackedColorArray = PackedColorArray()
+# The drag overlay only needs redrawing while a piece is held; track so we can
+# stop pumping it a redraw every idle frame (and clear it once on drop).
+var _drag_layer_active : bool = false
 
 # Tray spawn bounce
 var tray_pop_t : float = 0.0
@@ -369,7 +374,15 @@ func _process(delta: float) -> void:
 		if _idle_redraw_accum >= 1.0 / 30.0:
 			_idle_redraw_accum = 0.0
 			queue_redraw()
-	drag_layer.queue_redraw()
+	# Only pump the drag overlay while a piece is actually held. On release we
+	# redraw once more to clear it, then leave it idle (was redrawing 60×/sec
+	# every frame even with nothing to draw).
+	if dragging_slot >= 0:
+		drag_layer.queue_redraw()
+		_drag_layer_active = true
+	elif _drag_layer_active:
+		drag_layer.queue_redraw()
+		_drag_layer_active = false
 
 # ── Spawning ──────────────────────────────────────────────────────────────────
 func _spawn_pieces() -> void:
@@ -1978,19 +1991,22 @@ func _draw_drag_layer() -> void:
 			pat + cell[0] * 7 + cell[1] * 13, 0.0, pat_r)
 
 # ── Rounded drawing helpers (Game.gd copy of Grid.gd's) ──────────────────────
+# Reuse BlockSkins' precomputed 16 corner unit-directions so this is pure
+# add/multiply (no per-call cos/sin) — the UI chrome redraws every main-canvas
+# frame (the animated background keeps it at 30fps), so it adds up.
 func _rr_points(r: Rect2, rad: float) -> PackedVector2Array:
 	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
+	var c0 := Vector2(r.position.x + rad, r.position.y + rad)
+	var c1 := Vector2(r.end.x - rad,      r.position.y + rad)
+	var c2 := Vector2(r.end.x - rad,      r.end.y - rad)
+	var c3 := Vector2(r.position.x + rad, r.end.y - rad)
 	var pts := PackedVector2Array()
-	var corners := [
-		[r.position + Vector2(rad, rad),                      PI,        PI * 1.5],
-		[Vector2(r.end.x - rad, r.position.y + rad),          PI * 1.5,  TAU],
-		[r.end - Vector2(rad, rad),                           0.0,       PI * 0.5],
-		[Vector2(r.position.x + rad, r.end.y - rad),          PI * 0.5,  PI],
-	]
-	for cn in corners:
-		for i in 4:
-			var a : float = lerpf(cn[1], cn[2], float(i) / 3.0)
-			pts.append(cn[0] + Vector2(cos(a), sin(a)) * rad)
+	pts.resize(16)
+	for i in 4:
+		pts[i]      = c0 + BlockSkins._RR_UNIT[i] * rad
+		pts[4 + i]  = c1 + BlockSkins._RR_UNIT[4 + i] * rad
+		pts[8 + i]  = c2 + BlockSkins._RR_UNIT[8 + i] * rad
+		pts[12 + i] = c3 + BlockSkins._RR_UNIT[12 + i] * rad
 	return pts
 
 func _rr_fill(r: Rect2, rad: float, col: Color) -> void:
@@ -2002,11 +2018,14 @@ func _rr_outline(r: Rect2, rad: float, col: Color, width: float) -> void:
 	draw_polyline(pts, col, width)
 
 func _rr_grad(r: Rect2, rad: float, top_col: Color, bot_col: Color) -> void:
-	var pts  := _rr_points(r, rad)
-	var cols := PackedColorArray()
-	for p in pts:
-		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
-	draw_polygon(pts, cols)
+	var pts := _rr_points(r, rad)
+	var n := pts.size()
+	if _ui_gradbuf.size() != n:
+		_ui_gradbuf.resize(n)
+	var inv_h := 1.0 / r.size.y
+	for i in n:
+		_ui_gradbuf[i] = top_col.lerp(bot_col, clampf((pts[i].y - r.position.y) * inv_h, 0.0, 1.0))
+	draw_polygon(pts, _ui_gradbuf)
 
 func _draw_gear_button() -> void:
 	var c := GEAR_RECT.get_center()
