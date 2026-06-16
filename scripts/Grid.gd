@@ -45,6 +45,7 @@ var last_place_center := Vector2.ZERO
 var frame_pulse : float = 0.0
 var frame_rect : ColorRect          # GPU-shader layer for the animated border
 var frame_mat  : ShaderMaterial
+var _frame_fs  : float
 
 func _bump_frame(strong: bool) -> void:
 	frame_pulse = maxf(frame_pulse, 1.5 if strong else 0.85)
@@ -70,7 +71,10 @@ func _ready() -> void:
 	# Animated multicolour border: a single GPU-shader ColorRect. It animates on
 	# the GPU via TIME, so there is NO per-frame redraw and it stays perfectly
 	# smooth (true SDF rounded corners). We only push the clear-flare + biome hue.
+	# The rect is added as a SIBLING of Grid (not a child) so it always renders
+	# behind Grid's own draw, guaranteeing blocks appear on top of the border.
 	var fs := BOARD_SPAN + 2.0 * FRAME_MARGIN
+	_frame_fs = fs
 	frame_mat = ShaderMaterial.new()
 	frame_mat.shader = load("res://assets/shaders/board_frame.gdshader")
 	frame_mat.set_shader_parameter("u_size", Vector2(fs, fs))
@@ -81,10 +85,16 @@ func _ready() -> void:
 	frame_rect.material = frame_mat
 	frame_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	frame_rect.size = Vector2(fs, fs)
-	frame_rect.position = Vector2(BOARD_SPAN * 0.5 - fs * 0.5, BOARD_SPAN * 0.5 - fs * 0.5)
-	frame_rect.z_index = 1
-	frame_rect.show_behind_parent = true
-	add_child(frame_rect)
+	frame_rect.z_index = 0
+	call_deferred("_add_frame_behind_grid")
+
+func _add_frame_behind_grid() -> void:
+	var parent := get_parent()
+	# Position in parent (Game) space: Grid position + frame offset within Grid
+	frame_rect.position = position + Vector2(BOARD_SPAN * 0.5 - _frame_fs * 0.5,
+											 BOARD_SPAN * 0.5 - _frame_fs * 0.5)
+	parent.add_child(frame_rect)
+	parent.move_child(frame_rect, 0)  # first child = renders before Grid
 
 func _process(delta: float) -> void:
 	var needs_redraw := false
