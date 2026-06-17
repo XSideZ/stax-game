@@ -220,6 +220,7 @@ var _drag_layer_active : bool = false
 
 # Tray spawn bounce
 var tray_pop_t : float = 0.0
+var score_glow : float = 0.0   # 0..1 rainbow intensity, ramps with score (half@50k, full@100k)
 
 @onready var grid        : Grid        = $Grid
 @onready var score_label : Label       = $UI/ScoreLabel
@@ -360,6 +361,14 @@ func _process(delta: float) -> void:
 			disp_score = float(score)
 		_set_score_text(int(round(disp_score)))
 
+	# Score "powers up" into a glowing rainbow as it climbs — ~half tint at 50k,
+	# fully rainbow + glowing by 100k. score_glow also drives the halo in _draw.
+	score_glow = clampf(float(score) / 100000.0, 0.0, 1.0)
+	if score_glow > 0.0:
+		score_label.modulate = Color.WHITE.lerp(_score_shimmer_color(), score_glow)
+	else:
+		score_label.modulate = Color.WHITE
+
 	# When a fired power finishes, resolve survival (a spent power never kills you)
 	if _was_power_busy and not power_busy:
 		_resolve_after_power()
@@ -454,8 +463,8 @@ func _progression() -> float:
 # schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
 const DIFF_START := 12.0       # sets before the sets-ramp starts climbing (= early phase)
 const DIFF_LEN   := 45.0       # sets over which the sets-ramp climbs to max
-const DIFF_SCORE_START := 10000.0  # score where the score-ramp begins (earlier = 10k+ bites)
-const DIFF_SCORE_LEN   := 50000.0  # score span to max (~60k → fully hard by then)
+const DIFF_SCORE_START := 6000.0   # score where the score-ramp begins (earlier so 5k-10k bites)
+const DIFF_SCORE_LEN   := 52000.0  # score span to max (~58k → fully hard by then)
 func _difficulty() -> float:
 	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
 	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
@@ -509,7 +518,7 @@ const SMART_FADE_MOVES := 45.0
 # Early game = a fast "clear the whole board" puzzle. For the first few sets we
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
-const EARLY_CLEAR_SETS   := 11
+const EARLY_CLEAR_SETS   := 8
 const EARLY_CLEAR_CHANCE := 1.0
 # After this many sets with no full board clear, briefly favour small clearing
 # pieces again (a "drain") to set up another board clear — keeps board clears
@@ -865,6 +874,7 @@ func _start_drag(pos: Vector2) -> void:
 		snap_anchor   = Vector2i(-999, -999)   # fresh hysteresis lock for this piece
 		last_hover_valid = false   # so the first valid hover this drag ticks
 		Sfx.play_pickup()
+		_spawn_sparkles(pos + Vector2(0, -DRAG_LIFT), 5, 26.0)
 		queue_redraw()
 
 func _end_drag(pos: Vector2) -> void:
@@ -882,6 +892,8 @@ func _end_drag(pos: Vector2) -> void:
 		grid.place(shape, snap.y, snap.x, color, pieces[dragging_slot].get("pattern", 0))
 		placed[dragging_slot] = true
 		Sfx.play_place()
+		_spawn_sparkles(Vector2(GRID_X + (grid.last_place_center.x + 0.5) * GRID_STEP,
+			GRID_Y + (grid.last_place_center.y + 0.5) * GRID_STEP), 10, 46.0)
 
 		var cells_cleared : int = grid.check_and_clear()
 		var lines         : int = grid.last_lines_cleared
@@ -1413,8 +1425,15 @@ func _draw() -> void:
 	# Score floats as an outlined candy numeral (no box). A soft biome-accent halo
 	# behind it gives each skin its own personality; the best pill is accent-tinted.
 	var sacc : Color = THEMES[_visual_idx()]["accent"]
-	draw_circle(Vector2(207, 66), 98.0, Color(sacc.r, sacc.g, sacc.b, 0.07))
-	draw_circle(Vector2(207, 66), 62.0, Color(sacc.r, sacc.g, sacc.b, 0.09))
+	# As the score climbs the halo blends to rainbow + grows/brightens (matches the
+	# rainbow score numeral). score_glow is 0..1 (half@50k, full@100k), set in _process.
+	var glow_col : Color = sacc
+	if score_glow > 0.0:
+		glow_col = sacc.lerp(_score_shimmer_color(), score_glow)
+	draw_circle(Vector2(207, 66), 98.0 + score_glow * 22.0, Color(glow_col.r, glow_col.g, glow_col.b, 0.07 + score_glow * 0.10))
+	draw_circle(Vector2(207, 66), 62.0 + score_glow * 12.0, Color(glow_col.r, glow_col.g, glow_col.b, 0.09 + score_glow * 0.12))
+	if score_glow > 0.0:
+		draw_circle(Vector2(207, 66), 132.0, Color(glow_col.r, glow_col.g, glow_col.b, score_glow * 0.06))
 	var bpill := Rect2(132, 125, 150, 31)
 	_rr_fill(bpill, 15.0, Color(0, 0, 0, 0.32))
 	_rr_fill(bpill, 15.0, Color(sacc.r, sacc.g, sacc.b, 0.20))
@@ -2008,10 +2027,27 @@ func _draw_slot(i: int) -> void:
 	var ox : float = sx + 6.0 + (avail_w - pw_s) * 0.5 - min_c * tstep
 	var oy : float = TRAY_Y + (TRAY_H - ph_s) * 0.5 - min_r * tstep
 
+	# Spawn grow+bounce: each fresh piece scales up from a point with an overshoot,
+	# staggered slot-to-slot, instead of teleporting in at full size.
+	var pop_s := 1.0
+	if tray_pop_t > 0.0:
+		var ap := clampf((1.0 - tray_pop_t) * 1.6 - float(i) * 0.16, 0.0, 1.0)
+		pop_s = _back_out(ap)
+	var pcx : float = ox + min_c * tstep + pw_s * 0.5   # piece centre (scale origin)
+	var pcy : float = oy + min_r * tstep + ph_s * 0.5
+
 	for cell in shape:
 		var rx : float = ox + cell[0] * tstep
 		var ry : float = oy + cell[1] * tstep
-		_draw_styled_block(Rect2(rx, ry, tcell, tcell), color,
+		var cr := Rect2(rx, ry, tcell, tcell)
+		if pop_s != 1.0:
+			var ncell : float = tcell * pop_s
+			if ncell < 6.0:
+				continue   # too small to paint cleanly — skip this first instant
+			var ccx : float = pcx + (rx + tcell * 0.5 - pcx) * pop_s
+			var ccy : float = pcy + (ry + tcell * 0.5 - pcy) * pop_s
+			cr = Rect2(ccx - ncell * 0.5, ccy - ncell * 0.5, ncell, ncell)
+		_draw_styled_block(cr, color,
 			pieces[i].get("pattern", 0) + cell[0] * 7 + cell[1] * 13)
 
 # Draws on drag_layer (above the grid) — the piece floats DRAG_LIFT px above
@@ -2036,8 +2072,9 @@ func _draw_drag_layer() -> void:
 
 	var draw_color : Color = color
 
-	# Pickup pop: piece swells briefly when grabbed
-	var pop := 1.0 + sin(drag_pop_t * PI) * 0.10
+	# Pickup pop: piece jumps bigger the instant it's grabbed, then springs back.
+	# (drag_pop_t starts at 1.0 on grab and decays — so the pop is biggest at pickup.)
+	var pop := 1.0 + drag_pop_t * 0.20
 	var pat : int = pieces[dragging_slot].get("pattern", 0)
 	for cell in shape:
 		var rx : float = ox + cell[0] * GRID_STEP
@@ -2221,6 +2258,7 @@ func _draw_fx_layer() -> void:
 			"laser_fire":   _fx_laser_fire(e, p)
 			"gravity":      _fx_gravity(e, p)
 			"pixel_art":    _fx_pixel_art(e, p)
+			"sparkle":      _fx_sparkle_burst(e, p)
 	# Drawn here (top layer) so it sits ABOVE the board cells; Game._draw is behind them.
 	if rescue_active:
 		_draw_rescue(fx_layer)
@@ -2291,6 +2329,56 @@ func _fx_pixel_art(e: Dictionary, p: float) -> void:
 func _fx_sparkle(pos: Vector2, size: float, col: Color) -> void:
 	fx_layer.draw_line(pos + Vector2(-size, 0), pos + Vector2(size, 0), col, 1.5)
 	fx_layer.draw_line(pos + Vector2(0, -size), pos + Vector2(0, size), col, 1.5)
+
+# A quick burst of little rainbow 4-point stars that fly out and fade — the flashy
+# pop on pickup and placement (Block-Blast-style sparkle).
+func _spawn_sparkles(center: Vector2, n: int, spread: float) -> void:
+	var parts : Array = []
+	for i in n:
+		parts.append({
+			"ang":   randf() * TAU,
+			"dist":  randf_range(spread * 0.35, spread),
+			"size":  randf_range(4.0, 8.5),
+			"hue":   randf(),
+			"delay": randf() * 0.10,
+		})
+	effects.append({"type": "sparkle", "t": 0.0, "dur": 0.5, "center": center, "parts": parts})
+	fx_layer.queue_redraw()
+
+func _fx_sparkle_burst(e: Dictionary, p: float) -> void:
+	var center : Vector2 = e["center"]
+	for part in e["parts"]:
+		var delay : float = part["delay"]
+		var lp : float = clampf((p - delay) / maxf(1.0 - delay, 0.01), 0.0, 1.0)
+		if lp <= 0.0:
+			continue
+		var d : float = float(part["dist"]) * (1.0 - pow(1.0 - lp, 2.0))   # ease-out fly-out
+		var pos : Vector2 = center + Vector2(cos(part["ang"]), sin(part["ang"])) * d
+		var sz : float = float(part["size"]) * sin(lp * PI)                # grow then shrink
+		if sz < 0.6:
+			continue
+		var col := Color.from_hsv(fmod(float(part["hue"]) + p * 0.25, 1.0), 0.80, 1.0, 1.0 - lp * 0.5)
+		_draw_star4(pos, sz, col)
+
+# 4-point sparkle star (axis points long, diagonals short), drawn on fx_layer.
+# Pops via a soft colour glow halo + a white-hot twinkle core (no dark outline —
+# that swallowed the thin points and read as a black star at this size).
+func _draw_star4(c: Vector2, r: float, col: Color) -> void:
+	var a := col.a
+	# Soft glow halo behind
+	fx_layer.draw_circle(c, r * 1.8, Color(col.r, col.g, col.b, a * 0.18))
+	fx_layer.draw_circle(c, r * 1.1, Color(col.r, col.g, col.b, a * 0.28))
+	# The star itself, bright
+	var inner : float = r * 0.36
+	var pts := PackedVector2Array()
+	for i in 4:
+		var ang : float = float(i) * (PI * 0.5)
+		pts.append(c + Vector2(cos(ang), sin(ang)) * r)
+		var ang2 : float = ang + PI * 0.25
+		pts.append(c + Vector2(cos(ang2), sin(ang2)) * inner)
+	BlockSkins.draw_poly_safe(fx_layer, pts, col)
+	# White-hot twinkle core
+	fx_layer.draw_circle(c, r * 0.30, Color(1, 1, 1, a * 0.9))
 
 func _fx_bomb_drop(e: Dictionary, p: float) -> void:
 	var target : Vector2 = e["pos"]
@@ -2609,12 +2697,18 @@ func _animate_praise(delta: float) -> void:
 		var letters : Array = e["letters"]
 		var base_xs : Array = e["base_xs"]
 		var cy : float = e["cy"]
+		# Keep the letter colours in the CURRENT biome's family (a hue band around its
+		# accent) instead of the full rainbow, so the words blend with each skin — same
+		# treatment as the rainbow score. Each letter still ripples for a multi-tone feel.
+		var sacc : Color = THEMES[_visual_idx()]["accent"]
+		var base_h : float = sacc.h
+		var p_sat : float = clampf(sacc.s * 1.15 + 0.12, 0.25, 0.92)
 		for i in letters.size():
 			var lab : Label = letters[i]
 			if not is_instance_valid(lab):
 				continue
-			var hue : float = fmod(e["hue0"] + float(i) * 0.07 + t * 0.55, 1.0)
-			lab.modulate = Color.from_hsv(hue, 0.88, 1.0, alpha)
+			var hue : float = fmod(base_h + sin(t * 2.2 + float(i) * 0.55 + float(e["hue0"]) * TAU) * 0.13 + 1.0, 1.0)
+			lab.modulate = Color.from_hsv(hue, p_sat, 1.0, alpha)
 			var wave : float = sin(t * 7.0 + float(i) * 0.6) * e["amp"] * sc
 			lab.position = Vector2(base_xs[i], cy + yoff + wave)
 			lab.scale = Vector2(sc, sc)
@@ -2748,15 +2842,22 @@ func _save_run() -> void:
 	GameState.save_run_to_disk()
 
 func _pop_score(gained: int) -> void:
+	# Just a scale bounce — the gold colour flash was removed (it fought the
+	# white / rainbow score colour and read as an off-looking yellow blink).
 	score_label.scale = Vector2(1.25, 1.25)
 	var t := create_tween()
 	t.tween_property(score_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK)
-	if gained > 100:
-		score_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.15))
-		await get_tree().create_timer(0.4).timeout
-		score_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 
 # Score numeral shrinks as it grows so huge scores (up to 1M+) never overflow.
+# Shimmer colour for the high-score glow — kept in the CURRENT biome's colour family
+# (a hue band around its accent) so it harmonises with each skin instead of cycling
+# the full rainbow (which clashed on coloured biomes). Updates as the skin changes.
+func _score_shimmer_color() -> Color:
+	var sacc : Color = THEMES[_visual_idx()]["accent"]
+	var hue := fmod(sacc.h + sin(Time.get_ticks_msec() * 0.0009) * 0.10 + 1.0, 1.0)
+	var sat := clampf(sacc.s * 1.15 + 0.12, 0.18, 0.90)
+	return Color.from_hsv(hue, sat, 1.0)
+
 func _set_score_text(n: int) -> void:
 	var s := str(n)
 	score_label.text = s

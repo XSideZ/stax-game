@@ -10,7 +10,7 @@ const POOL_SIZE   := 6
 
 var _pool         : Array[AudioStreamPlayer] = []
 var _music_player : AudioStreamPlayer
-var _music_thread : Thread
+var _music_task   : int = -1   # WorkerThreadPool task id for the async music render
 
 var _snd_place    : AudioStreamWAV
 var _snd_pickup   : AudioStreamWAV
@@ -38,22 +38,27 @@ func _ready() -> void:
 	add_child(_music_player)
 
 	_build_sounds()
-	# Music is ~29s of synthesis — render it off the main thread so the app
-	# starts instantly; it begins playing a moment later when ready
-	_music_thread = Thread.new()
-	_music_thread.start(_generate_music)
+	# Music is ~29s of synthesis — render it off the main thread so the app starts
+	# instantly; it begins playing a moment later when ready. WorkerThreadPool (not a
+	# raw Thread) is engine-managed, which avoids the mobile teardown crash a manually
+	# joined Thread could cause when iOS terminates the app.
+	_music_task = WorkerThreadPool.add_task(_generate_music)
 
 func _generate_music() -> void:
 	var stream := _build_music()
 	call_deferred("_on_music_ready", stream)
 
 func _on_music_ready(stream: AudioStreamWAV) -> void:
+	if not is_instance_valid(_music_player):
+		return   # app is tearing down — don't touch a freed node
 	_music_player.stream = stream
 	update_music()
 
 func _exit_tree() -> void:
-	if _music_thread != null and _music_thread.is_started():
-		_music_thread.wait_to_finish()
+	# Let the render task finish before this node is freed (its callable binds self).
+	if _music_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_music_task)
+		_music_task = -1
 
 # ── Public API ────────────────────────────────────────────────────────────────
 # In cat mode, placement + clears speak in little kitten meows

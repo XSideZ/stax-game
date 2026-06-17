@@ -177,6 +177,12 @@ var pending_toasts : Array = []      # achievements unlocked at game over (shown
 var last_xp_gain   : int = 0
 var last_xp_before : int = 0         # XP before the run's payout — drives the bar animation
 
+# Online leaderboard identity (anonymous — no login). player_id is a device UUID;
+# friend_code is the short shareable code others enter to add you. Both persisted.
+var player_id   : String = ""
+var friend_code : String = ""
+const _CODE_ALPHABET := "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # no ambiguous 0/O/1/I/L
+
 # Lifetime stats (profile card → stats panel, achievement quest values)
 var total_score       : int = 0     # every run's final score summed
 var stat_blocks       : int = 0     # total pieces placed
@@ -330,6 +336,7 @@ func xp_progress() -> Array:
 func set_player_name(n: String) -> void:
 	player_name = n.strip_edges().substr(0, 12)
 	_save()
+	_sync_online()   # update our display name on the leaderboard
 
 # Called once per game over: grants run XP, rolls lifetime stats and checks
 # games-played milestones
@@ -422,6 +429,45 @@ func _ready() -> void:
 	check_unlocks(false)   # mark already-earned achievements done WITHOUT granting
 						   # XP — you only gain levels by playing, not by launching
 	check_skin_unlocks()   # mark already-earned skins as seen (no toast flood)
+	_ensure_identity()     # device id + friend code for the online leaderboard
+	_sync_online()         # push our row up (creates it so friends can add us)
+
+# ── Online identity / leaderboard sync ────────────────────────────────────────
+func _ensure_identity() -> void:
+	var changed := false
+	if player_id == "":
+		player_id = _gen_uuid()
+		changed = true
+	if friend_code == "":
+		friend_code = _gen_friend_code()
+		changed = true
+	if changed:
+		_save()
+
+func _gen_uuid() -> String:
+	var b := PackedByteArray()
+	b.resize(16)
+	for i in 16:
+		b[i] = randi() & 0xff
+	b[6] = (b[6] & 0x0f) | 0x40   # version 4
+	b[8] = (b[8] & 0x3f) | 0x80   # variant
+	var h := b.hex_encode()
+	return "%s-%s-%s-%s-%s" % [h.substr(0, 8), h.substr(8, 4), h.substr(12, 4),
+		h.substr(16, 4), h.substr(20, 12)]
+
+func _gen_friend_code() -> String:
+	var s := ""
+	for i in 7:
+		s += _CODE_ALPHABET[randi() % _CODE_ALPHABET.length()]
+	return s
+
+# Push our row to Supabase (no-op until Net is configured). submit_score upserts,
+# keeping the server-side max, so re-syncing a lower local best is harmless.
+func _sync_online() -> void:
+	if player_id == "":
+		return
+	var nm := player_name if player_name != "" else "PLAYER"
+	Net.submit_score(player_id, friend_code, nm, best_score, get_level())
 
 func submit_score(s: int) -> void:
 	last_score = s
@@ -437,6 +483,7 @@ func record_final_score(s: int) -> void:
 		if scores.size() > MAX_SCORES:
 			scores.resize(MAX_SCORES)
 	_save()
+	_sync_online()   # push the new best to the online leaderboard
 
 func set_sound(on: bool) -> void:
 	sound_on = on
@@ -588,6 +635,8 @@ func _save() -> void:
 	f.store_var(skin_locked)
 	f.store_var(save_epoch)
 	f.store_var(tutorial_done)
+	f.store_var(player_id)
+	f.store_var(friend_code)
 	f.close()
 
 func _load() -> void:
@@ -647,6 +696,10 @@ func _load() -> void:
 		save_epoch = f.get_var()
 	if f.get_position() < f.get_length():
 		tutorial_done = f.get_var()
+	if f.get_position() < f.get_length():
+		player_id = f.get_var()
+	if f.get_position() < f.get_length():
+		friend_code = f.get_var()
 	f.close()
 	# One-time global reset after the XP rework — anyone on an older epoch starts
 	# fresh at level 1 (settings + name kept).

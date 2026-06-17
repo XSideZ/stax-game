@@ -74,6 +74,7 @@ func _build_menu() -> void:
 	_build_settings_panel()
 	_build_achievements_panel()
 	_build_biomes_panel()
+	_build_leaderboard_panel()
 	_build_stats_panel()
 	if SHOW_SKIN_PICKER:
 		_build_skin_picker()
@@ -530,6 +531,15 @@ var biome_rows     : VBoxContainer
 var biome_mode_btn : Button
 var biome_hint     : Label
 var biome_swatches : Array = []   # preview Controls redrawn each frame
+
+# ── Online leaderboard + friends ─────────────────────────────────────────────
+var lb_box        : PanelContainer
+var lb_rows       : VBoxContainer
+var lb_status     : Label
+var lb_global_btn : Button
+var lb_friends_btn: Button
+var lb_code_input : LineEdit
+var lb_tab        : String = "global"   # "global" | "friends"
 
 func _build_achievements_panel() -> void:
 	ach_box = PanelContainer.new()
@@ -1035,6 +1045,234 @@ func _deny_button(b: Button) -> void:
 	t.tween_property(b, "position:x", ox, 0.06).set_trans(Tween.TRANS_SINE)
 
 # ── Buttons ───────────────────────────────────────────────────────────────────
+# ── Leaderboard + friends panel ───────────────────────────────────────────────
+func _build_leaderboard_panel() -> void:
+	lb_box = PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.12, 0.11, 0.08)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.06, 0.05, 0.03)
+	psb.content_margin_left = 18; psb.content_margin_right = 18
+	psb.content_margin_top = 16;  psb.content_margin_bottom = 20
+	lb_box.add_theme_stylebox_override("panel", psb)
+	lb_box.position = Vector2(22, 60)
+	lb_box.custom_minimum_size = Vector2(370, 0)
+	lb_box.visible = false
+	ui.add_child(lb_box)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	lb_box.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "LEADERBOARD"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	# Global / Friends tabs
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 8)
+	vbox.add_child(tabs)
+	lb_global_btn = _make_chunky_button("GLOBAL", Color(0.95, 0.75, 0.25), 18)
+	lb_global_btn.custom_minimum_size = Vector2(0, 46)
+	lb_global_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lb_global_btn.pressed.connect(func(): _set_lb_tab("global"))
+	tabs.add_child(lb_global_btn)
+	lb_friends_btn = _make_chunky_button("FRIENDS", Color(0.30, 0.80, 0.55), 18)
+	lb_friends_btn.custom_minimum_size = Vector2(0, 46)
+	lb_friends_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lb_friends_btn.pressed.connect(func(): _set_lb_tab("friends"))
+	tabs.add_child(lb_friends_btn)
+
+	# Your shareable code + copy
+	var code_row := HBoxContainer.new()
+	code_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(code_row)
+	var code_lbl := Label.new()
+	code_lbl.text = "YOUR CODE:  " + GameState.friend_code
+	code_lbl.add_theme_font_size_override("font_size", 15)
+	code_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	code_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	code_row.add_child(code_lbl)
+	var copy := _make_chunky_button("COPY", Color(0.40, 0.55, 0.95), 14)
+	copy.custom_minimum_size = Vector2(74, 40)
+	copy.pressed.connect(func():
+		DisplayServer.clipboard_set(GameState.friend_code)
+		_flash_lb_status("Code copied!", Color(0.55, 0.85, 1.0)))
+	code_row.add_child(copy)
+
+	# Add a friend by their code
+	var add_row := HBoxContainer.new()
+	add_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(add_row)
+	lb_code_input = LineEdit.new()
+	lb_code_input.placeholder_text = "friend's code"
+	lb_code_input.max_length = 7
+	lb_code_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lb_code_input.custom_minimum_size = Vector2(0, 42)
+	add_row.add_child(lb_code_input)
+	var add_btn := _make_chunky_button("ADD", Color(0.30, 0.80, 0.55), 16)
+	add_btn.custom_minimum_size = Vector2(74, 42)
+	add_btn.pressed.connect(_on_add_friend_pressed)
+	add_row.add_child(add_btn)
+
+	lb_status = Label.new()
+	lb_status.add_theme_font_size_override("font_size", 14)
+	lb_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	lb_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(lb_status)
+
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(334, 372)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vbox.add_child(scroll)
+	lb_rows = VBoxContainer.new()
+	lb_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lb_rows.add_theme_constant_override("separation", 6)
+	lb_rows.mouse_filter = Control.MOUSE_FILTER_PASS
+	scroll.add_child(lb_rows)
+
+	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 18)
+	close.custom_minimum_size = Vector2(0, 50)
+	close.pressed.connect(func():
+		Sfx.play_click()
+		lb_box.visible = false)
+	vbox.add_child(close)
+
+	# Wire Net responses once (autoload persists; guard against double-connect)
+	if not Net.global_board.is_connected(_on_global_board):
+		Net.global_board.connect(_on_global_board)
+	if not Net.friends_board.is_connected(_on_friends_board):
+		Net.friends_board.connect(_on_friends_board)
+	if not Net.friend_added.is_connected(_on_friend_added):
+		Net.friend_added.connect(_on_friend_added)
+
+func _open_leaderboard() -> void:
+	lb_box.visible = true
+	lb_box.scale = Vector2(0.85, 0.85)
+	lb_box.pivot_offset = Vector2(185, 300)
+	var t := create_tween()
+	t.tween_property(lb_box, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_set_lb_tab("global")
+
+func _set_lb_tab(tab: String) -> void:
+	lb_tab = tab
+	lb_global_btn.modulate.a  = 1.0 if tab == "global" else 0.45
+	lb_friends_btn.modulate.a = 1.0 if tab == "friends" else 0.45
+	for child in lb_rows.get_children():
+		child.queue_free()
+	if not Net.is_configured():
+		lb_status.text = "Leaderboard offline"
+		return
+	lb_status.text = "Loading…"
+	if tab == "global":
+		Net.fetch_global(50)
+	else:
+		Net.fetch_friends(GameState.player_id)
+
+func _on_global_board(rows: Array) -> void:
+	if lb_box != null and lb_box.visible and lb_tab == "global":
+		_populate_board(rows, false)
+
+func _on_friends_board(rows: Array) -> void:
+	if lb_box != null and lb_box.visible and lb_tab == "friends":
+		_populate_board(rows, true)
+
+func _populate_board(rows: Array, is_friends: bool) -> void:
+	for child in lb_rows.get_children():
+		child.queue_free()
+	if rows.is_empty():
+		lb_status.text = "No friends yet — add some by code!" if is_friends else "No scores yet"
+		return
+	lb_status.text = ""
+	for row in rows:
+		var rank : int    = int(row.get("rank", 0))
+		var nm   : String = str(row.get("name", "?"))
+		var sc   : int    = int(row.get("best_score", 0))
+		var mine : bool
+		if is_friends:
+			mine = bool(row.get("is_me", false))
+		else:
+			mine = nm == GameState.player_name and sc == GameState.best_score
+		lb_rows.add_child(_make_board_row(rank, nm, sc, mine))
+
+func _make_board_row(rank: int, nm: String, score: int, mine: bool) -> PanelContainer:
+	var card := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.set_corner_radius_all(10)
+	sb.content_margin_left = 10; sb.content_margin_right = 10
+	sb.content_margin_top = 7;   sb.content_margin_bottom = 7
+	if mine:
+		sb.bg_color = Color(0.95, 0.78, 0.20, 0.20)
+		sb.set_border_width_all(2)
+		sb.border_color = Color(0.98, 0.82, 0.30)
+	else:
+		sb.bg_color = Color(1, 1, 1, 0.05)
+	card.add_theme_stylebox_override("panel", sb)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	card.add_child(row)
+
+	var rank_lbl := Label.new()
+	rank_lbl.text = "#" + str(rank)
+	rank_lbl.add_theme_font_size_override("font_size", 18)
+	var rcol := Color(1, 1, 1, 0.8)
+	if rank == 1:   rcol = Color(1.00, 0.84, 0.25)
+	elif rank == 2: rcol = Color(0.80, 0.84, 0.90)
+	elif rank == 3: rcol = Color(0.90, 0.62, 0.36)
+	rank_lbl.add_theme_color_override("font_color", rcol)
+	rank_lbl.custom_minimum_size = Vector2(48, 0)
+	row.add_child(rank_lbl)
+
+	var name_lbl := Label.new()
+	name_lbl.text = nm
+	name_lbl.add_theme_font_size_override("font_size", 18)
+	name_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_lbl)
+
+	var score_lbl := Label.new()
+	score_lbl.text = _fmt_num(score)
+	score_lbl.add_theme_font_size_override("font_size", 18)
+	score_lbl.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	row.add_child(score_lbl)
+	return card
+
+func _on_add_friend_pressed() -> void:
+	var code := lb_code_input.text.strip_edges()
+	if code.length() < 4:
+		_flash_lb_status("Enter a friend code", Color(1.0, 0.6, 0.4))
+		return
+	if not Net.is_configured():
+		_flash_lb_status("Leaderboard offline", Color(1.0, 0.6, 0.4))
+		return
+	Sfx.play_click()
+	lb_status.text = "Adding…"
+	Net.add_friend(GameState.player_id, code)
+
+func _on_friend_added(friend_name: String) -> void:
+	if lb_box == null or not lb_box.visible:
+		return
+	if friend_name == "":
+		_flash_lb_status("No player with that code", Color(1.0, 0.5, 0.4))
+		return
+	lb_code_input.clear()
+	_flash_lb_status("Added " + friend_name + "!", Color(0.55, 0.9, 0.55))
+	if lb_tab == "friends":
+		Net.fetch_friends(GameState.player_id)
+
+func _flash_lb_status(msg: String, col: Color) -> void:
+	lb_status.text = msg
+	lb_status.add_theme_color_override("font_color", col)
+	var t := create_tween()
+	t.tween_interval(1.6)
+	t.tween_callback(func():
+		lb_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6)))
+
 func _make_chunky_button(label_text: String, fill: Color, font_size: int = 24) -> Button:
 	var b := Button.new()
 	b.text = label_text
@@ -1124,12 +1362,22 @@ func _build_buttons() -> void:
 		_open_achievements())
 	fade_in.append(ach)
 
+	var leaderboard := _make_chunky_button("LEADERBOARD", Color(0.95, 0.75, 0.25), 22)
+	leaderboard.size = Vector2(280, 58)
+	leaderboard.position = Vector2(67, 660 if has_run else 598)
+	leaderboard.pivot_offset = leaderboard.size * 0.5
+	ui.add_child(leaderboard)
+	leaderboard.pressed.connect(func():
+		Sfx.play_click()
+		_open_leaderboard())
+	fade_in.append(leaderboard)
+
 	var biomes_ok := GameState.get_level() >= BIOMES_UNLOCK_LEVEL
 	var biomes := _make_chunky_button(
 		"BIOMES" if biomes_ok else "BIOMES   LV " + str(BIOMES_UNLOCK_LEVEL),
 		Color(0.30, 0.80, 0.55) if biomes_ok else Color(0.34, 0.34, 0.42), 22)
 	biomes.size = Vector2(280, 58)
-	biomes.position = Vector2(67, 660 if has_run else 598)
+	biomes.position = Vector2(67, 732 if has_run else 670)
 	biomes.pivot_offset = biomes.size * 0.5
 	ui.add_child(biomes)
 	if biomes_ok:
@@ -1144,7 +1392,7 @@ func _build_buttons() -> void:
 
 	var settings := _make_chunky_button("SETTINGS", Color(0.20, 0.75, 0.95), 22)
 	settings.size = Vector2(280, 58)
-	settings.position = Vector2(67, 732 if has_run else 670)
+	settings.position = Vector2(67, 804 if has_run else 742)
 	settings.pivot_offset = settings.size * 0.5
 	ui.add_child(settings)
 	settings.pressed.connect(func():

@@ -47,6 +47,14 @@ var frame_rect : ColorRect          # GPU-shader layer for the animated border
 var frame_mat  : ShaderMaterial
 var _frame_fs  : float
 
+# Reused draw buffers — avoid allocating a fresh PackedArray on every rounded-rect
+# fill/outline (2+ per cell × 64 cells per redraw = the GC churn behind the hitches).
+# draw_polygon/draw_polyline copy on submit, so reusing one buffer is safe.
+var _rrbuf    : PackedVector2Array = PackedVector2Array()
+var _rrclosed : PackedVector2Array = PackedVector2Array()
+var _rrcol    : PackedColorArray   = PackedColorArray([Color.WHITE])
+var _rrgrad   : PackedColorArray   = PackedColorArray()
+
 func _bump_frame(strong: bool) -> void:
 	frame_pulse = maxf(frame_pulse, 1.5 if strong else 0.85)
 
@@ -151,9 +159,22 @@ func _draw() -> void:
 	if slamming:
 		_draw_slam()
 		return
+	# Precompute once per redraw instead of per-cell (was 64 sin() + 64 linear
+	# Array.has() scans + a place_anim loop per cell — pure overhead on a full board).
+	var pulse := (sin(Time.get_ticks_msec() * 0.012) + 1.0) * 0.5
+	var ghost_set : Dictionary = {}
+	for g in ghost_cells:
+		ghost_set[g] = true
+	var preview_set : Dictionary = {}
+	for p in preview_cells:
+		preview_set[p] = true
+	var place_map : Dictionary = {}
+	for pa in place_anim:
+		place_map[Vector2i(pa["c"], pa["r"])] = pa["t"]
+
 	for r in ROWS:
 		for c in COLS:
-			_draw_cell(r, c)
+			_draw_cell(r, c, pulse, ghost_set, preview_set, place_map)
 	# Drips (honey/slime) hang below blocks — painted after ALL cells so the
 	# row beneath doesn't cover them
 	if BlockSkins.OVERLAY_STYLES.has(block_style):
@@ -165,16 +186,16 @@ func _draw() -> void:
 	if clearing:
 		_draw_clear_pop()
 
-func _draw_cell(r: int, c: int) -> void:
+func _draw_cell(r: int, c: int, pulse: float, ghost_set: Dictionary,
+		preview_set: Dictionary, place_map: Dictionary) -> void:
 	var rect := Rect2(c * STEP, r * STEP, CELL, CELL)
 	var col  : Color = cells[r][c] if cells[r][c] != null else Color.TRANSPARENT
 	var gv   := Vector2i(c, r)
 
-	var pulse := (sin(Time.get_ticks_msec() * 0.012) + 1.0) * 0.5
-	var in_preview := preview_cells.has(gv)
+	var in_preview := preview_set.has(gv)
 
 	if col == Color.TRANSPARENT:
-		if ghost_cells.has(gv):
+		if ghost_set.has(gv):
 			var ga := 0.42 if in_preview else 0.30
 			_rounded_rect(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, ga))
 			_rounded_outline(rect, RAD, Color(ghost_color.r, ghost_color.g, ghost_color.b, 0.75), 1.5)
@@ -189,10 +210,12 @@ func _draw_cell(r: int, c: int) -> void:
 		col = col.lerp(preview_color.lightened(0.25), 0.55 + pulse * 0.20)
 
 	var sc := Vector2.ONE
-	for pa in place_anim:
-		if pa["r"] == r and pa["c"] == c:
-			sc = _squash_scale(clampf(pa["t"], 0.0, 1.0))
-			break
+	if place_map.has(gv):
+		var pt : float = place_map[gv]
+		sc = _squash_scale(clampf(pt, 0.0, 1.0))
+		# Brief white "landing" flash as the block settles (on top of the squash)
+		if pt >= 0.0 and pt < 0.30:
+			col = col.lerp(Color(1, 1, 1), (1.0 - pt / 0.30) * 0.45)
 
 	var drv := rect
 	if sc != Vector2.ONE:
@@ -239,29 +262,35 @@ func _rounded_points(r: Rect2, rad: float) -> PackedVector2Array:
 	var c1 := Vector2(r.end.x - rad,      r.position.y + rad)
 	var c2 := Vector2(r.end.x - rad,      r.end.y - rad)
 	var c3 := Vector2(r.position.x + rad, r.end.y - rad)
-	var pts := PackedVector2Array()
-	pts.resize(16)
+	if _rrbuf.size() != 16:
+		_rrbuf.resize(16)
 	for i in 4:
-		pts[i]      = c0 + BlockSkins._RR_UNIT[i] * rad
-		pts[4 + i]  = c1 + BlockSkins._RR_UNIT[4 + i] * rad
-		pts[8 + i]  = c2 + BlockSkins._RR_UNIT[8 + i] * rad
-		pts[12 + i] = c3 + BlockSkins._RR_UNIT[12 + i] * rad
-	return pts
+		_rrbuf[i]      = c0 + BlockSkins._RR_UNIT[i] * rad
+		_rrbuf[4 + i]  = c1 + BlockSkins._RR_UNIT[4 + i] * rad
+		_rrbuf[8 + i]  = c2 + BlockSkins._RR_UNIT[8 + i] * rad
+		_rrbuf[12 + i] = c3 + BlockSkins._RR_UNIT[12 + i] * rad
+	return _rrbuf
 
 func _rounded_rect(r: Rect2, rad: float, col: Color) -> void:
-	draw_polygon(_rounded_points(r, rad), PackedColorArray([col]))
+	_rrcol[0] = col
+	draw_polygon(_rounded_points(r, rad), _rrcol)
 
 func _rounded_outline(r: Rect2, rad: float, col: Color, width: float) -> void:
 	var pts := _rounded_points(r, rad)
-	pts.append(pts[0])
-	draw_polyline(pts, col, width)
+	if _rrclosed.size() != 17:
+		_rrclosed.resize(17)
+	for i in 16:
+		_rrclosed[i] = pts[i]
+	_rrclosed[16] = pts[0]
+	draw_polyline(_rrclosed, col, width)
 
 func _rounded_gradient(r: Rect2, rad: float, top_col: Color, bot_col: Color) -> void:
-	var pts  := _rounded_points(r, rad)
-	var cols := PackedColorArray()
-	for p in pts:
-		cols.append(top_col.lerp(bot_col, clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
-	draw_polygon(pts, cols)
+	var pts := _rounded_points(r, rad)
+	if _rrgrad.size() != pts.size():
+		_rrgrad.resize(pts.size())
+	for i in pts.size():
+		_rrgrad[i] = top_col.lerp(bot_col, clampf((pts[i].y - r.position.y) / r.size.y, 0.0, 1.0))
+	draw_polygon(pts, _rrgrad)
 
 # ── Clear pop animation ───────────────────────────────────────────────────────
 # Each cleared cell pops: scales up bright, then shrinks to nothing while

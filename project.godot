@@ -20,6 +20,7 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+Net="*res://scripts/Net.gd"
 GameState="*res://scripts/GameState.gd"
 Sfx="*res://scripts/Sfx.gd"
 Ads="*res://scripts/Ads.gd"
