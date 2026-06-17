@@ -160,6 +160,7 @@ var _icon_font : Font = load("res://assets/fonts/baloo2_semibold.tres")  # for t
 var last_power_tier : int = 0     # detect crossing into a new ability tier
 var fx_layer    : Node2D          # top layer for bomb/laser/gravity effects
 var effects     : Array = []      # active visual effects
+var praise_pops : Array = []      # active rainbow per-letter praise popups (NICE!, etc.)
 
 # Drag-hover haptic: buzz once each time we move onto a new valid placement
 var last_hover_snap  : Vector2i = Vector2i(-99, -99)
@@ -205,6 +206,7 @@ var tut_lock_cell : Vector2i = Vector2i.ZERO
 const RESCUE_SECS := 4.5
 var rescue_active   : bool  = false
 var rescue_timer    : float = 0.0
+var _was_rescue     : bool  = false   # detect the rescue prompt ending (repaint to clear it)
 var _was_power_busy : bool  = false   # detect when a fired power finishes resolving
 
 # Idle background redraws throttle to ~30fps (perf: the parallax skins are the
@@ -333,6 +335,13 @@ func _process(delta: float) -> void:
 				alive.append(e)
 		effects = alive
 		fx_layer.queue_redraw()
+	# Moving-rainbow praise letters (NICE!, BOARD CLEAR!, …)
+	_animate_praise(delta)
+	# The rescue prompt lives on fx_layer and animates (pulse + countdown), so keep it
+	# repainting while active — and once more when it ends so the banner clears.
+	if rescue_active or _was_rescue:
+		fx_layer.queue_redraw()
+	_was_rescue = rescue_active
 	if power_pulse > 0.0:
 		power_pulse = maxf(power_pulse - delta * 2.0, 0.0)
 
@@ -393,8 +402,13 @@ func _spawn_pieces() -> void:
 	# Slot 0 is gifted a board-clearing piece when one exists — but only some of the
 	# time once the run gets going. Early on it's near-guaranteed (keeps the fast
 	# board-clear loop); deep in a run it's rare, so survival gets real.
+	# Slot 0 is gifted a board-clearing piece. The opening keeps the satisfying near-
+	# guaranteed loop; once past it the gift tapers from ~70% down to rare, so from
+	# ~10k upward the board stops being constantly emptied for you.
 	var forced_clear : Array = []
-	if randf() < lerpf(1.0, 0.18, _difficulty()):
+	var gift_chance : float = 1.0 if sets_given < EARLY_CLEAR_SETS \
+		else lerpf(0.70, 0.03, _difficulty())
+	if randf() < gift_chance:
 		forced_clear = _pick_board_clear_shape()
 
 	var picked_keys: Array = []
@@ -435,18 +449,34 @@ func _progression() -> float:
 	return clampf((sets_given - 2) / 10.0, 0.0, 1.0)
 
 # Run difficulty 0..1. Stays 0 through the (already well-tuned) early game, then
-# ramps up over a long run so the generosity crutches fade and it gets genuinely
-# hard to survive deep into a run instead of feeling the same at 10k and 200k.
-const DIFF_START := 14.0   # sets before difficulty starts climbing (= early phase)
-const DIFF_LEN   := 60.0   # sets over which it climbs to max
+# ramps up so the generosity crutches fade and it gets genuinely hard. Driven by the
+# MAX of two ramps — sets played AND score — so a fast high-scoring run gets hard on
+# schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
+const DIFF_START := 12.0       # sets before the sets-ramp starts climbing (= early phase)
+const DIFF_LEN   := 45.0       # sets over which the sets-ramp climbs to max
+const DIFF_SCORE_START := 10000.0  # score where the score-ramp begins (earlier = 10k+ bites)
+const DIFF_SCORE_LEN   := 50000.0  # score span to max (~60k → fully hard by then)
 func _difficulty() -> float:
-	return clampf((float(sets_given) - DIFF_START) / DIFF_LEN, 0.0, 1.0)
+	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
+	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
+	return clampf(maxf(by_sets, by_score), 0.0, 1.0)
+
+# Deep-run pressure that keeps climbing AFTER _difficulty() has maxed (score 80k→300k),
+# so a long high-score run keeps tightening instead of plateauing at "max" difficulty.
+const DEEP_START := 80000.0
+const DEEP_LEN   := 220000.0
+func _deep() -> float:
+	return clampf((float(score) - DEEP_START) / DEEP_LEN, 0.0, 1.0)
 
 # Drain toward a board clear: early in the run, or when it's been too long since
 # the last one. The drought threshold GROWS with difficulty so board-clear bailouts
 # get rarer the deeper you are — the board stays fuller and the pressure builds.
 func _wants_clear() -> bool:
-	var drought : int = int(round(lerpf(float(CLEAR_DROUGHT), 13.0, _difficulty())))
+	# Board-clear bailouts get rarer as the run gets harder: drought grows with
+	# difficulty, then keeps growing into the deep game so the board stays full and
+	# the pressure is real at high scores.
+	var drought : int = int(round(
+		lerpf(float(CLEAR_DROUGHT), 20.0, _difficulty()) + lerpf(0.0, 8.0, _deep())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
@@ -479,7 +509,7 @@ const SMART_FADE_MOVES := 45.0
 # Early game = a fast "clear the whole board" puzzle. For the first few sets we
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
-const EARLY_CLEAR_SETS   := 14
+const EARLY_CLEAR_SETS   := 11
 const EARLY_CLEAR_CHANCE := 1.0
 # After this many sets with no full board clear, briefly favour small clearing
 # pieces again (a "drain") to set up another board clear — keeps board clears
@@ -1101,6 +1131,9 @@ func _award_power_clear(cells_cleared: int, lines: int) -> void:
 		sets_since_clear = 0
 		Sfx.play_board_clear()
 		_show_board_clear_popup()
+	else:
+		# Rainbow praise scaled to how much the ability cleared.
+		_show_praise(_praise_tier_for_cells(cells_cleared))
 	score += pts
 	GameState.submit_score(score)
 	lines_cleared += lines
@@ -1409,27 +1442,55 @@ func _draw() -> void:
 
 	draw_set_transform(Vector2.ZERO)
 
-	# Power-rescue prompt sits on top of everything
-	if rescue_active:
-		_draw_rescue()
+	# NOTE: the power-rescue prompt is drawn on fx_layer (see _draw_fx_layer), NOT here.
+	# Game._draw renders BEHIND child nodes (the Grid/board), so drawing it here would
+	# hide it behind the board cells.
 
 # "No moves — use your power!" alert: a pulsing ring on the orb + a banner.
-func _draw_rescue() -> void:
+# Draws on `ci` (the fx_layer canvas item) — NOT bare self.draw_*, which is invalid
+# inside another node's draw signal (was erroring every frame, banner never appeared).
+func _draw_rescue(ci: CanvasItem) -> void:
 	var pulse := (sin(Time.get_ticks_msec() * 0.012) + 1.0) * 0.5
 	# Strong pulsing ring around the power orb to pull the eye to it
-	draw_arc(POWER_CENTER, POWER_R + 9.0 + pulse * 5.0, 0, TAU, 40,
+	ci.draw_arc(POWER_CENTER, POWER_R + 9.0 + pulse * 5.0, 0, TAU, 40,
 		Color(1.0, 0.85, 0.30, 0.55 + 0.40 * pulse), 3.5, true)
+	# Cute bubbly red arrow bobbing toward the orb so it's obvious where to tap.
+	# Built as ONE rounded polygon so a single clean outline wraps the whole shape.
+	var u := (POWER_CENTER - Vector2(120.0, 132.0)).normalized()  # points up-left at the orb
+	var v := Vector2(-u.y, u.x)
+	var bob := 3.0 + pulse * 10.0
+	var tip := POWER_CENTER - u * (POWER_R + 4.0 + bob)
+	var hl := 22.0   # head length
+	var hw := 24.0   # head half-width (fat, bubbly)
+	var sl := 24.0   # shaft length
+	var sw := 10.0   # shaft half-width
+	var raw := PackedVector2Array([
+		tip,
+		tip - u * hl + v * hw,
+		tip - u * hl + v * sw,
+		tip - u * (hl + sl) + v * sw,
+		tip - u * (hl + sl) - v * sw,
+		tip - u * hl - v * sw,
+		tip - u * hl - v * hw,
+	])
+	var arrow := _round_poly(raw, 7.0, 4)
+	var arrow_outline := arrow
+	arrow_outline.append(arrow[0])
+	BlockSkins.draw_poly_safe(ci, arrow, Color(1.0, 0.30, 0.34, 0.95))  # candy-red fill
+	ci.draw_polyline(arrow_outline, Color(1, 1, 1, 0.95), 3.5, true)    # one soft white outline
 	# Alert banner across the board
 	var panel := Rect2(47, 326, 320, 102)
-	_rr_fill(panel, 18.0, Color(0.12, 0.04, 0.06, 0.90))
-	_rr_outline(panel, 18.0, Color(1.0, 0.40, 0.35, 0.45 + 0.40 * pulse), 2.5)
+	ci.draw_polygon(_rr_points(panel, 18.0), PackedColorArray([Color(0.12, 0.04, 0.06, 0.90)]))
+	var outline := _rr_points(panel, 18.0)
+	outline.append(outline[0])
+	ci.draw_polyline(outline, Color(1.0, 0.40, 0.35, 0.45 + 0.40 * pulse), 2.5)
 	var f := _icon_font
-	draw_string(f, Vector2(panel.position.x, 366), "NO MOVES LEFT!",
+	ci.draw_string(f, Vector2(panel.position.x, 366), "NO MOVES LEFT!",
 		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 27, Color(1.0, 0.85, 0.40))
-	draw_string(f, Vector2(panel.position.x, 397), "Tap your POWER to survive",
+	ci.draw_string(f, Vector2(panel.position.x, 397), "Tap your POWER to survive",
 		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 18, Color(1, 1, 1, 0.88))
 	var secs : int = int(ceil(rescue_timer))
-	draw_string(f, Vector2(panel.position.x, 420), str(secs),
+	ci.draw_string(f, Vector2(panel.position.x, 420), str(secs),
 		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x, 15, Color(1, 1, 1, 0.55))
 
 func _draw_bg_pattern() -> void:
@@ -1994,6 +2055,31 @@ func _draw_drag_layer() -> void:
 # Reuse BlockSkins' precomputed 16 corner unit-directions so this is pure
 # add/multiply (no per-call cos/sin) — the UI chrome redraws every main-canvas
 # frame (the animated background keeps it at 30fps), so it adds up.
+# Round every corner of an arbitrary polygon with a quadratic-bezier fillet — used
+# for the cute bubbly rescue arrow (one smooth outline around the whole silhouette).
+func _round_poly(pts: PackedVector2Array, radius: float, segs: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var n := pts.size()
+	for i in n:
+		var cur := pts[i]
+		var din := cur - pts[(i - 1 + n) % n]
+		var dout := pts[(i + 1) % n] - cur
+		var lin := din.length()
+		var lout := dout.length()
+		if lin < 0.001 or lout < 0.001:
+			out.append(cur)
+			continue
+		din /= lin
+		dout /= lout
+		var r := minf(radius, minf(lin, lout) * 0.5)
+		var a := cur - din * r
+		var b := cur + dout * r
+		for s in segs + 1:
+			var t := float(s) / float(segs)
+			var omt := 1.0 - t
+			out.append(a * (omt * omt) + cur * (2.0 * omt * t) + b * (t * t))
+	return out
+
 func _rr_points(r: Rect2, rad: float) -> PackedVector2Array:
 	rad = minf(rad, minf(r.size.x, r.size.y) * 0.5)
 	var c0 := Vector2(r.position.x + rad, r.position.y + rad)
@@ -2135,6 +2221,9 @@ func _draw_fx_layer() -> void:
 			"laser_fire":   _fx_laser_fire(e, p)
 			"gravity":      _fx_gravity(e, p)
 			"pixel_art":    _fx_pixel_art(e, p)
+	# Drawn here (top layer) so it sits ABOVE the board cells; Game._draw is behind them.
+	if rescue_active:
+		_draw_rescue(fx_layer)
 
 # Board-clear flourish: the WHOLE board fills with a colourful pixel pattern made
 # of the CURRENT skin's own blocks (every skin gets it for free), held a beat,
@@ -2396,131 +2485,164 @@ func _show_score_popup(amount: int, cleared_lines: int, multiplier: int) -> void
 	t.parallel().tween_property(lbl, "modulate", Color(pop_color.r, pop_color.g, pop_color.b, 0.0), 0.6)
 	t.tween_callback(lbl.queue_free)
 
+# More words per tier for variety — picked randomly each clear.
+const PRAISE_WORDS := {
+	1: ["NICE!", "SWEET!", "CLEAN!", "TIDY!", "CRISP!", "SNAPPY!"],
+	2: ["EXCELLENT!", "GREAT!", "SLICK!", "SHARP!", "DOUBLE!", "COMBO!"],
+	3: ["AMAZING!", "TRIPLE!", "SUPERB!", "BLAZING!", "FANTASTIC!"],
+	4: ["INCREDIBLE!", "QUAD!", "UNREAL!", "MASSIVE!", "INSANE!"],
+	5: ["LEGENDARY!", "GODLIKE!", "UNSTOPPABLE!", "COSMIC!", "MYTHIC!"],
+}
+
 func _show_clear_text(lines: int) -> void:
 	if lines == 0:
 		return
+	_show_praise(clampi(lines, 1, 5))
 
-	var text   : String
-	var color  : Color
-	var fsize  : int
-	var bounce : float
-	var hold   : float
+# Map an ability's cell-clear count to a praise tier ("how much they clear").
+func _praise_tier_for_cells(cells: int) -> int:
+	if cells <= 5:
+		return 1
+	elif cells <= 9:
+		return 2
+	elif cells <= 15:
+		return 3
+	elif cells <= 23:
+		return 4
+	return 5
 
-	if lines == 1:
-		text   = "NICE!"
-		color  = THEMES[_visual_idx()]["accent"]   # single-line clears speak the theme's colour
-		fsize  = 38
-		bounce = 1.18
-		hold   = 0.30
-	elif lines == 2:
-		text   = "EXCELLENT!"
-		color  = Color(0.20, 0.90, 0.50, 1.0)
-		fsize  = 52
-		bounce = 1.28
-		hold   = 0.50
-	elif lines == 3:
-		text   = "AMAZING!"
-		color  = Color(0.95, 0.85, 0.15, 1.0)
-		fsize  = 66
-		bounce = 1.40
-		hold   = 0.70
-	elif lines == 4:
-		text   = "INCREDIBLE!"
-		color  = Color(1.00, 0.50, 0.10, 1.0)
-		fsize  = 72
-		bounce = 1.52
-		hold   = 0.90
-	else:
-		text   = "LEGENDARY!!!"
-		color  = Color(0.90, 0.20, 0.65, 1.0)
-		fsize  = 78
-		bounce = 1.65
-		hold   = 1.10
+func _show_praise(tier: int) -> void:
+	tier = clampi(tier, 1, 5)
+	var words : Array = PRAISE_WORDS[tier]
+	var text : String = words[randi() % words.size()]
+	# Bigger per tier + a tiny bit longer hold than before.
+	var fsize  : int   = [46, 60, 74, 84, 94][tier - 1]
+	var bounce : float = [1.22, 1.32, 1.44, 1.56, 1.68][tier - 1]
+	var hold   : float = [0.50, 0.65, 0.85, 1.05, 1.30][tier - 1]
+	var amp    : float = [2.5, 3.5, 4.5, 5.5, 6.5][tier - 1]
+	_spawn_praise(text, fsize, bounce, hold, amp)
 
-	var w    : float = 380.0
-	var h    : float = float(fsize) + 24.0
-	var px   : float = (414.0 - w) * 0.5
-	var py   : float = 300.0
+# Sum of per-character advance widths at a given size (for centring the letters).
+func _measure_word(text: String, fsize: int) -> Dictionary:
+	var widths : Array = []
+	var total  : float = 0.0
+	for ch in text:
+		var w : float = _icon_font.get_string_size(ch, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x
+		widths.append(w)
+		total += w
+	return {"widths": widths, "total": total}
 
-	# Glow halo behind (only for 2+ clears)
-	if lines >= 2:
-		var glow := Label.new()
-		glow.text = text
-		glow.add_theme_font_size_override("font_size", fsize + 6)
-		glow.add_theme_color_override("font_color", Color(color.r, color.g, color.b, 0.28))
-		glow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		glow.size         = Vector2(w + 10, h + 10)
-		glow.position     = Vector2(px - 5, py - 5)
-		glow.scale        = Vector2(0.05, 0.05)
-		glow.pivot_offset = Vector2((w + 10) * 0.5, (h + 10) * 0.5)
-		ui.add_child(glow)
-		var gt := create_tween()
-		gt.tween_property(glow, "scale", Vector2(bounce * 1.08, bounce * 1.08), 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		gt.tween_property(glow, "scale", Vector2(1.08, 1.08), 0.10)
-		gt.tween_interval(hold + 0.15)
-		gt.tween_property(glow, "modulate:a", 0.0, 0.45)
-		gt.tween_callback(glow.queue_free)
+# Build a praise popup as ONE Baloo label per letter; _animate_praise then flows a
+# rainbow across them + bobs each letter, so it reads as moving rainbow bubble text.
+func _spawn_praise(text: String, fsize: int, bounce: float, hold: float, amp: float) -> void:
+	var m : Dictionary = _measure_word(text, fsize)
+	# Shrink to fit the screen width for long words at big sizes.
+	if m["total"] > 392.0:
+		fsize = maxi(22, int(float(fsize) * 392.0 / float(m["total"])))
+		m = _measure_word(text, fsize)
+	var widths : Array = m["widths"]
+	var cx : float = 207.0
+	# Roomy box so the thick outline never gets clipped flat (that was the "horizontal
+	# line" through tall letters); glyphs centre vertically on screen-y 320.
+	var lh : float = float(fsize) * 1.85
+	var cy : float = 320.0 - lh * 0.5
+	var outline : int = clampi(int(round(float(fsize) * 0.17)), 8, 14)  # a touch thicker = bubblier
+	var letters : Array = []
+	var base_xs : Array = []
+	var x_cursor : float = cx - float(m["total"]) * 0.5
+	for idx in text.length():
+		var ch : String = text[idx]
+		var w  : float  = widths[idx]
+		var bw : float  = w + float(fsize) * 0.6
+		var px : float  = x_cursor + w * 0.5 - bw * 0.5   # centre the glyph on its advance slot
+		var lab := Label.new()
+		lab.text = ch
+		lab.clip_text = false
+		lab.add_theme_font_override("font", _icon_font)
+		lab.add_theme_font_size_override("font_size", fsize)
+		lab.add_theme_color_override("font_color", Color(1, 1, 1, 1))
+		lab.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 1))
+		lab.add_theme_constant_override("outline_size", outline)
+		lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lab.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		lab.size         = Vector2(bw, lh)
+		lab.pivot_offset = Vector2(bw * 0.5, lh * 0.5)
+		lab.position     = Vector2(px, cy)
+		lab.scale        = Vector2(0.1, 0.1)
+		ui.add_child(lab)
+		letters.append(lab)
+		base_xs.append(px)
+		x_cursor += w
+	praise_pops.append({
+		"letters": letters, "base_xs": base_xs, "cy": cy,
+		"t": 0.0, "hold": hold, "bounce": bounce, "amp": amp,
+		"hue0": randf(),
+	})
 
-	# Main label
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", fsize)
-	lbl.add_theme_color_override("font_color", color)
-	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
-	lbl.add_theme_constant_override("outline_size", 10)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.size         = Vector2(w, h)
-	lbl.position     = Vector2(px, py)
-	lbl.scale        = Vector2(0.05, 0.05)
-	lbl.pivot_offset = Vector2(w * 0.5, h * 0.5)
-	lbl.rotation_degrees = randf_range(-6.0, 6.0)
-	ui.add_child(lbl)
-
-	var t := create_tween()
-	# Pop in with bounce + straighten with an elastic wobble
-	t.tween_property(lbl, "scale", Vector2(bounce, bounce), 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(lbl, "rotation_degrees", -lbl.rotation_degrees * 0.5, 0.16)
-	t.tween_property(lbl, "scale", Vector2(1.0, 1.0), 0.10).set_trans(Tween.TRANS_SPRING).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(lbl, "rotation_degrees", 0.0, 0.22).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-
-	# Extra wobble for big clears
-	if lines >= 3:
-		t.tween_property(lbl, "scale", Vector2(1.10, 0.92), 0.06)
-		t.tween_property(lbl, "scale", Vector2(0.94, 1.08), 0.06)
-		t.tween_property(lbl, "scale", Vector2(1.0, 1.0), 0.06)
-
-	# Double pulse for huge clears
-	if lines >= 4:
-		t.tween_property(lbl, "scale", Vector2(1.14, 1.14), 0.09).set_trans(Tween.TRANS_SINE)
-		t.tween_property(lbl, "scale", Vector2(1.0, 1.0), 0.09).set_trans(Tween.TRANS_SINE)
-
-	# Legendary gets a third pulse + color flash
-	if lines >= 5:
-		t.tween_property(lbl, "scale", Vector2(1.18, 1.18), 0.08).set_trans(Tween.TRANS_SINE)
-		t.tween_property(lbl, "scale", Vector2(1.0, 1.0), 0.08).set_trans(Tween.TRANS_SINE)
-		t.parallel().tween_property(lbl, "modulate", Color(1.0, 0.85, 0.15, 1.0), 0.08)
-		t.tween_property(lbl, "modulate", Color(1, 1, 1, 1), 0.08)
-
-	# Hold then float up and fade
-	t.tween_interval(hold)
-	t.tween_property(lbl, "position", Vector2(px, py - 80.0), 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(lbl, "modulate:a", 0.0, 0.55)
-	t.tween_callback(lbl.queue_free)
+# Drives every active praise popup each frame: pop-in bounce → hold → float up + fade,
+# with a rainbow that flows across the letters and a per-letter wave bob.
+func _animate_praise(delta: float) -> void:
+	if praise_pops.is_empty():
+		return
+	var alive : Array = []
+	for e in praise_pops:
+		e["t"] += delta
+		var t      : float = e["t"]
+		var bounce : float = e["bounce"]
+		var hold   : float = e["hold"]
+		# Scale lifecycle: overshoot in, settle, hold at 1.
+		var sc : float
+		if t < 0.16:
+			sc = _back_out(t / 0.16) * bounce
+		elif t < 0.30:
+			sc = lerpf(bounce, 1.0, (t - 0.16) / 0.14)
+		else:
+			sc = 1.0
+		var fade_start : float = 0.30 + hold
+		var alpha : float = 1.0
+		var yoff  : float = 0.0
+		if t >= fade_start:
+			var fp : float = (t - fade_start) / 0.55
+			alpha = clampf(1.0 - fp, 0.0, 1.0)
+			yoff  = -fp * 80.0
+		var dur : float = fade_start + 0.55
+		var letters : Array = e["letters"]
+		var base_xs : Array = e["base_xs"]
+		var cy : float = e["cy"]
+		for i in letters.size():
+			var lab : Label = letters[i]
+			if not is_instance_valid(lab):
+				continue
+			var hue : float = fmod(e["hue0"] + float(i) * 0.07 + t * 0.55, 1.0)
+			lab.modulate = Color.from_hsv(hue, 0.88, 1.0, alpha)
+			var wave : float = sin(t * 7.0 + float(i) * 0.6) * e["amp"] * sc
+			lab.position = Vector2(base_xs[i], cy + yoff + wave)
+			lab.scale = Vector2(sc, sc)
+		if t < dur:
+			alive.append(e)
+		else:
+			for lab in letters:
+				if is_instance_valid(lab):
+					lab.queue_free()
+	praise_pops = alive
 
 func _show_board_clear_popup() -> void:
+	# Big rainbow bubble "BOARD CLEAR!" (same moving-rainbow letters as the praise text)
+	_spawn_praise("BOARD CLEAR!", 74, 1.58, 1.15, 6.0)
+	# Small gold "+points" floater under it
 	var lbl := Label.new()
-	lbl.text = "BOARD CLEAR!  +" + str(BOARD_CLEAR_PTS)
-	lbl.add_theme_font_size_override("font_size", 42)
+	lbl.text = "+" + str(BOARD_CLEAR_PTS)
+	lbl.add_theme_font_size_override("font_size", 40)
 	lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.0, 1.0))
 	lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09, 0.85))
 	lbl.add_theme_constant_override("outline_size", 8)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.size     = Vector2(320, 70)
-	lbl.position = Vector2(47, 320)
+	lbl.size     = Vector2(320, 60)
+	lbl.position = Vector2(47, 360)
 	ui.add_child(lbl)
 	var t := create_tween()
-	t.tween_property(lbl, "position", Vector2(47, 240), 1.0).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(lbl, "modulate", Color(1, 1, 1, 0), 1.0).set_delay(0.5)
+	t.tween_property(lbl, "position", Vector2(47, 320), 1.1).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(lbl, "modulate", Color(1, 1, 1, 0), 1.1).set_delay(0.6)
 	t.tween_callback(lbl.queue_free)
 
 func _update_combo_label() -> void:
