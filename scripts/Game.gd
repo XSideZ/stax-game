@@ -161,6 +161,11 @@ var last_power_tier : int = 0     # detect crossing into a new ability tier
 var fx_layer    : Node2D          # top layer for bomb/laser/gravity effects
 var effects     : Array = []      # active visual effects
 var praise_pops : Array = []      # active rainbow per-letter praise popups (NICE!, etc.)
+# Center-banner queue: line-clear praise, BOARD CLEAR, biome name all share the same
+# center strip, so they're shown one-after-another (a quick cascade) instead of mashing
+# on top of each other. Drained in _process so nothing fires after a scene change.
+var banner_queue : Array = []     # [{fn: Callable, slot: float}, …]
+var _banner_t    : float = 0.0    # time left before the center strip is free for the next
 
 # Drag-hover haptic: buzz once each time we move onto a new valid placement
 var last_hover_snap  : Vector2i = Vector2i(-99, -99)
@@ -342,6 +347,7 @@ func _process(delta: float) -> void:
 		fx_layer.queue_redraw()
 	# Moving-rainbow praise letters (NICE!, BOARD CLEAR!, …)
 	_animate_praise(delta)
+	_drain_banner_queue(delta)
 	# The rescue prompt lives on fx_layer and animates (pulse + countdown), so keep it
 	# repainting while active — and once more when it ends so the banner clears.
 	if rescue_active or _was_rescue:
@@ -1342,6 +1348,9 @@ func _advance_theme() -> void:
 	_show_theme_popup(THEMES[theme_idx]["name"])
 
 func _show_theme_popup(theme_name: String) -> void:
+	_enqueue_banner(_spawn_theme_banner.bind(theme_name), 1.3)
+
+func _spawn_theme_banner(theme_name: String) -> void:
 	var accent : Color = THEMES[theme_idx]["accent"]
 	var cy := 360.0   # over the board centre — a real "you've arrived" moment
 
@@ -2586,6 +2595,23 @@ const PRAISE_WORDS := {
 	5: ["LEGENDARY!", "GODLIKE!", "UNSTOPPABLE!", "COSMIC!", "MYTHIC!"],
 }
 
+# ── Center-banner queue ───────────────────────────────────────────────────────
+# Big center messages (clear praise, BOARD CLEAR, biome name) share one screen strip,
+# so they're queued and shown one-after-another (a quick cascade) rather than stacked.
+# `slot` = the gap before the NEXT banner pops (not the banner's full lifetime).
+func _enqueue_banner(fn: Callable, slot: float) -> void:
+	banner_queue.append({"fn": fn, "slot": slot})
+
+func _drain_banner_queue(delta: float) -> void:
+	if _banner_t > 0.0:
+		_banner_t -= delta
+	if _banner_t <= 0.0 and not banner_queue.is_empty():
+		var b : Dictionary = banner_queue.pop_front()
+		var fn : Callable = b["fn"]
+		if fn.is_valid():
+			fn.call()
+		_banner_t = float(b["slot"])
+
 func _show_clear_text(lines: int) -> void:
 	if lines == 0:
 		return
@@ -2612,7 +2638,8 @@ func _show_praise(tier: int) -> void:
 	var bounce : float = [1.22, 1.32, 1.44, 1.56, 1.68][tier - 1]
 	var hold   : float = [0.50, 0.65, 0.85, 1.05, 1.30][tier - 1]
 	var amp    : float = [2.5, 3.5, 4.5, 5.5, 6.5][tier - 1]
-	_spawn_praise(text, fsize, bounce, hold, amp)
+	# Queue it so a same-move clear + board-clear + biome banner cascade instead of mashing
+	_enqueue_banner(_spawn_praise.bind(text, fsize, bounce, hold, amp), clampf(0.30 + hold, 0.5, 0.9))
 
 # Sum of per-character advance widths at a given size (for centring the letters).
 func _measure_word(text: String, fsize: int) -> Dictionary:
@@ -2725,6 +2752,9 @@ func _animate_praise(delta: float) -> void:
 	praise_pops = alive
 
 func _show_board_clear_popup() -> void:
+	_enqueue_banner(_spawn_board_clear_banner, 0.95)
+
+func _spawn_board_clear_banner() -> void:
 	# Big rainbow bubble "BOARD CLEAR!" (same moving-rainbow letters as the praise text)
 	_spawn_praise("BOARD CLEAR!", 74, 1.58, 1.15, 6.0)
 	# Small gold "+points" floater under it
