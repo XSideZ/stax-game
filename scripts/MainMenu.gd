@@ -65,6 +65,11 @@ func _ready() -> void:
 	add_child(faller_layer)
 	faller_layer.draw.connect(_draw_fallers)
 
+	# Account sign-in feedback (autoload signals; this instance is fresh each load)
+	Auth.signed_in.connect(_on_auth_signed_in)
+	Auth.sign_in_failed.connect(_on_auth_failed)
+	Auth.signed_out.connect(_on_auth_signed_out)
+
 	# First open: only the animated background + name prompt. The menu builds
 	# (and the logo intro plays) after the name is confirmed.
 	if GameState.player_name.is_empty():
@@ -83,6 +88,9 @@ func _build_menu() -> void:
 	_build_leaderboard_panel()
 	_build_stats_panel()
 	_maybe_show_review()
+	# Silently refresh the player's global rank so the profile pin is up to date
+	if Net.is_configured():
+		Net.fetch_global(50)
 
 func _make_faller(anywhere: bool) -> Dictionary:
 	return {
@@ -464,6 +472,7 @@ func _close_review() -> void:
 var profile_name : Label
 var profile_chip : Label
 var profile_best : Label
+var profile_pin  : Control
 var xp_fill      : Panel
 var xp_text      : Label
 
@@ -489,6 +498,18 @@ func _build_profile() -> void:
 		Sfx.play_click()
 		_open_stats())
 	_add_press_effect(card)
+
+	# Global-rank pin sits left of the name (only shown once a rank is known)
+	profile_pin = Control.new()
+	profile_pin.custom_minimum_size = Vector2(30, 30)
+	profile_pin.size = Vector2(30, 30)
+	profile_pin.position = Vector2(13, 4)
+	profile_pin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	profile_pin.draw.connect(func():
+		var t := _rank_tier(GameState.my_global_rank)
+		if t > 0:
+			_draw_pin(profile_pin, Vector2(15, 15), 12.0, t))
+	card.add_child(profile_pin)
 
 	profile_name = Label.new()
 	profile_name.add_theme_font_size_override("font_size", 20)
@@ -547,6 +568,11 @@ func _build_profile() -> void:
 
 func _refresh_profile() -> void:
 	profile_name.text = GameState.player_name if not GameState.player_name.is_empty() else "PLAYER"
+	# Slide the name right when a rank pin is showing, flush-left when it isn't
+	var has_pin := _rank_tier(GameState.my_global_rank) > 0
+	profile_name.position.x = 48.0 if has_pin else 16.0
+	if is_instance_valid(profile_pin):
+		profile_pin.queue_redraw()
 	var lvl := GameState.get_level()
 	profile_chip.text = "LV " + str(lvl)
 	profile_best.text = ("BEST  " + _fmt_num(GameState.best_score)) if GameState.best_score > 0 else "NO RUNS YET"
@@ -625,6 +651,8 @@ func _build_name_prompt() -> void:
 var stats_box  : PanelContainer
 var stats_grid : GridContainer
 var stats_sub  : Label
+var stats_pin  : Control
+var stats_name : Label
 
 func _build_stats_panel() -> void:
 	stats_box = PanelContainer.new()
@@ -652,6 +680,25 @@ func _build_stats_panel() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 
+	# Name + rank pin, kept side-by-side so the badge reads as part of the name
+	var name_row := HBoxContainer.new()
+	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	name_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(name_row)
+	stats_pin = Control.new()
+	stats_pin.custom_minimum_size = Vector2(34, 34)
+	stats_pin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats_pin.draw.connect(func():
+		var t := _rank_tier(GameState.my_global_rank)
+		if t > 0:
+			_draw_pin(stats_pin, Vector2(17, 17), 13.0, t))
+	name_row.add_child(stats_pin)
+	stats_name = Label.new()
+	stats_name.add_theme_font_size_override("font_size", 22)
+	stats_name.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	stats_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_row.add_child(stats_name)
+
 	stats_sub = Label.new()
 	stats_sub.add_theme_font_size_override("font_size", 13)
 	stats_sub.add_theme_color_override("font_color", Color(0.95, 0.78, 0.20, 0.90))
@@ -675,7 +722,10 @@ func _populate_stats() -> void:
 	for child in stats_grid.get_children():
 		child.queue_free()
 	var pname := GameState.player_name if not GameState.player_name.is_empty() else "PLAYER"
-	stats_sub.text = pname + "   ·   LEVEL " + str(GameState.get_level()) \
+	stats_name.text = pname
+	stats_pin.visible = _rank_tier(GameState.my_global_rank) > 0
+	stats_pin.queue_redraw()
+	stats_sub.text = "LEVEL " + str(GameState.get_level()) \
 		+ "   ·   " + _fmt_num(GameState.player_xp) + " TOTAL XP"
 	var stats : Array = [
 		[_fmt_num(GameState.games_played),      "GAMES PLAYED"],
@@ -1418,8 +1468,22 @@ func _set_lb_tab(tab: String) -> void:
 		Net.fetch_friends(GameState.player_id)
 
 func _on_global_board(rows: Array) -> void:
+	_cache_my_rank(rows)   # update the profile pin even when the board isn't open
 	if lb_box != null and lb_box.visible and lb_tab == "global":
 		_populate_board(rows, false)
+
+# Find the player's own row in the global board and remember their rank so the
+# main-menu profile pin reflects it. Works whenever the player is in the fetched
+# top-N; full coverage (lower tiers) would need a get_my_rank RPC backend-side.
+func _cache_my_rank(rows: Array) -> void:
+	for row in rows:
+		var nm : String = str(row.get("name", "?"))
+		var sc : int    = int(row.get("best_score", 0))
+		if nm == GameState.player_name and sc == GameState.best_score:
+			GameState.set_global_rank(int(row.get("rank", 0)))
+			if is_instance_valid(profile_pin):
+				_refresh_profile()
+			return
 
 func _on_friends_board(rows: Array) -> void:
 	if lb_box != null and lb_box.visible and lb_tab == "friends":
@@ -1444,9 +1508,22 @@ func _populate_board(rows: Array, is_friends: bool) -> void:
 			mine = bool(row.get("is_me", false))
 		else:
 			mine = nm == GameState.player_name and sc == GameState.best_score
-		lb_rows.add_child(_make_board_row(rank, nm, sc, mine))
+		lb_rows.add_child(_make_board_row(rank, nm, sc, mine, _row_tier(row, is_friends, mine)))
 
-func _make_board_row(rank: int, nm: String, score: int, mine: bool) -> PanelContainer:
+# Pin tier for a board row. Global board: the row's rank IS the global rank. Friends
+# board: use a global_rank field if the backend supplies one, else show only YOUR own
+# row (we know your rank) — a friend's local rank isn't their global standing.
+func _row_tier(row: Dictionary, is_friends: bool, mine: bool) -> int:
+	if not is_friends:
+		return _rank_tier(int(row.get("rank", 0)))
+	var gr := int(row.get("global_rank", 0))
+	if gr > 0:
+		return _rank_tier(gr)
+	if mine:
+		return _rank_tier(GameState.my_global_rank)
+	return 0
+
+func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -> PanelContainer:
 	var card := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(10)
@@ -1463,6 +1540,9 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool) -> PanelCont
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	card.add_child(row)
+
+	# Rank-tier pin (kept as an empty slot when none, so columns stay aligned)
+	row.add_child(_make_rank_pin(tier))
 
 	var rank_lbl := Label.new()
 	rank_lbl.text = "#" + str(rank)
@@ -1488,6 +1568,103 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool) -> PanelCont
 	score_lbl.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
 	row.add_child(score_lbl)
 	return card
+
+# ── Rank pins: a medallion ladder by GLOBAL rank ─────────────────────────────
+# 0 = none. Six tiers, ascending prestige:
+#   1 = 101-1000 (slate + star outline)   2 = 11-100 (teal + filled star)
+#   3 = 4-10 (bronze + gem)               4 = rank 3 (silver + gem + glow)
+#   5 = rank 2 (gold + gem + glow)        6 = rank 1 (royal purple + big gem + glow + sparkles)
+func _rank_tier(rank: int) -> int:
+	if rank <= 0:    return 0
+	if rank == 1:    return 6
+	if rank == 2:    return 5
+	if rank == 3:    return 4
+	if rank <= 10:   return 3
+	if rank <= 100:  return 2
+	if rank <= 1000: return 1
+	return 0
+
+func _make_rank_pin(tier: int) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(32, 32)   # fixed slot keeps the rank column aligned
+	if tier > 0:
+		c.draw.connect(func(): _draw_pin(c, Vector2(16, 20), 11.0, tier))
+	return c
+
+func _draw_pin(canvas: Control, center: Vector2, r: float, tier: int) -> void:
+	var base : Color
+	var rim  : Color
+	match tier:
+		1: base = Color(0.44, 0.47, 0.56); rim = Color(0.22, 0.24, 0.30)   # slate (101-1000)
+		2: base = Color(0.18, 0.56, 0.64); rim = Color(0.07, 0.30, 0.36)   # teal (11-100)
+		3: base = Color(0.82, 0.52, 0.30); rim = Color(0.45, 0.26, 0.12)   # bronze (4-10)
+		4: base = Color(0.80, 0.84, 0.92); rim = Color(0.45, 0.50, 0.58)   # silver (rank 3)
+		5: base = Color(1.00, 0.82, 0.28); rim = Color(0.66, 0.46, 0.08)   # gold (rank 2)
+		_: base = Color(0.50, 0.26, 0.70); rim = Color(0.98, 0.78, 0.24)   # royal purple (rank 1)
+
+	# Glow ring — podium only (rank 1 gets a brighter gold double-glow)
+	match tier:
+		6:
+			canvas.draw_circle(center, r * 1.55, Color(1.00, 0.85, 0.30, 0.18))
+			canvas.draw_circle(center, r * 1.30, Color(1.00, 0.90, 0.45, 0.18))
+		5:
+			canvas.draw_circle(center, r * 1.40, Color(1.00, 0.85, 0.30, 0.16))
+		4:
+			canvas.draw_circle(center, r * 1.38, Color(0.85, 0.90, 1.00, 0.15))
+
+	# Medallion: chunky rim, body, subtle inner accent ring
+	canvas.draw_circle(center, r, rim)
+	canvas.draw_circle(center, r * 0.80, base)
+	canvas.draw_arc(center, r * 0.80, 0.0, TAU, 28, base.lightened(0.30), 1.5, true)
+
+	# Emblem: stars for the range tiers, gems for the elite/podium tiers
+	match tier:
+		1: _draw_pin_star(canvas, center, r * 0.52, Color(1, 0.96, 0.86), false)   # outline star
+		2: _draw_pin_star(canvas, center, r * 0.54, Color(1, 1, 1), true)          # filled star
+		6: _draw_pin_gem(canvas, center, r * 0.66)                                  # rank 1: big gem
+		_: _draw_pin_gem(canvas, center, r * 0.52)                                  # 4-10 / rank 3 / rank 2
+
+	# Sticker gloss
+	canvas.draw_circle(center + Vector2(-r * 0.32, -r * 0.36), r * 0.16, Color(1, 1, 1, 0.55))
+
+	# Podium sparkles
+	match tier:
+		6:
+			_draw_sparkle(canvas, center + Vector2(r * 0.78, -r * 0.74), r * 0.26)
+			_draw_sparkle(canvas, center + Vector2(-r * 0.82, r * 0.30), r * 0.16)
+		5:
+			_draw_sparkle(canvas, center + Vector2(r * 0.80, -r * 0.72), r * 0.20)
+		4:
+			_draw_sparkle(canvas, center + Vector2(r * 0.80, -r * 0.72), r * 0.18)
+
+func _draw_pin_star(canvas: Control, center: Vector2, r_out: float, col: Color, filled: bool) -> void:
+	var pts := _bubbly_star_points(center, r_out, r_out * 0.5, 0.4)
+	if filled:
+		canvas.draw_colored_polygon(pts, col)
+	var outline := pts.duplicate()
+	outline.append(pts[0])
+	canvas.draw_polyline(outline, col.darkened(0.35) if filled else col, 1.5, true)
+
+func _draw_pin_gem(canvas: Control, center: Vector2, s: float) -> void:
+	var top := center + Vector2(0, -s)
+	var rgt := center + Vector2(s * 0.78, 0)
+	var bot := center + Vector2(0, s)
+	var lft := center + Vector2(-s * 0.78, 0)
+	var pts := PackedVector2Array([top, rgt, bot, lft])
+	canvas.draw_colored_polygon(pts, Color(0.50, 0.88, 1.00))
+	canvas.draw_colored_polygon(PackedVector2Array([top, rgt, center, lft]), Color(0.80, 0.97, 1.00))
+	var ol := pts.duplicate()
+	ol.append(pts[0])
+	canvas.draw_polyline(ol, Color(0.18, 0.44, 0.64), 1.4, true)
+
+func _draw_sparkle(canvas: Control, pos: Vector2, s: float) -> void:
+	var pts := PackedVector2Array([
+		pos + Vector2(0, -s),         pos + Vector2(s * 0.22, -s * 0.22),
+		pos + Vector2(s, 0),          pos + Vector2(s * 0.22, s * 0.22),
+		pos + Vector2(0, s),          pos + Vector2(-s * 0.22, s * 0.22),
+		pos + Vector2(-s, 0),         pos + Vector2(-s * 0.22, -s * 0.22),
+	])
+	canvas.draw_colored_polygon(pts, Color(1, 1, 1, 0.9))
 
 func _on_add_friend_pressed() -> void:
 	var code := lb_code_input.text.strip_edges()
@@ -1799,6 +1976,33 @@ func _build_settings_panel() -> void:
 		Sfx.play_click())
 	vbox.add_child(hap)
 
+	var rename_btn := _make_chunky_button("CHANGE NAME", Color(0.30, 0.80, 0.55), 20)
+	rename_btn.custom_minimum_size = Vector2(0, 56)
+	rename_btn.pressed.connect(func(): _on_change_name_pressed(rename_btn))
+	vbox.add_child(rename_btn)
+
+	var hint := Label.new()
+	hint.text = "watch an ad to rename"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.40))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(hint)
+
+	var account := _make_chunky_button("ACCOUNT", Color(0.40, 0.55, 0.95), 20)
+	account.custom_minimum_size = Vector2(0, 56)
+	account.pressed.connect(func():
+		Sfx.play_click()
+		settings_box.visible = false
+		_open_account())
+	vbox.add_child(account)
+
+	var account_hint := Label.new()
+	account_hint.text = "back up your progress"
+	account_hint.add_theme_font_size_override("font_size", 12)
+	account_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.40))
+	account_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(account_hint)
+
 	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 20)
 	close.custom_minimum_size = Vector2(0, 56)
 	close.pressed.connect(func():
@@ -1821,6 +2025,225 @@ func _music_text() -> String:
 
 func _haptics_text() -> String:
 	return "HAPTICS: ON" if GameState.haptics_on else "HAPTICS: OFF"
+
+# Watch a rewarded ad, then open the name editor. Repeatable — each rename = one ad.
+func _on_change_name_pressed(btn: Button) -> void:
+	Sfx.play_click()
+	if not Ads.can_offer_rewarded():
+		_flash_btn(btn, "NO AD AVAILABLE", "CHANGE NAME")
+		return
+	btn.disabled = true
+	Ads.show_rewarded(func(earned: bool):
+		btn.disabled = false
+		if earned:
+			settings_box.visible = false
+			_open_name_change()
+		else:
+			_flash_btn(btn, "AD NOT FINISHED", "CHANGE NAME"))
+
+func _flash_btn(btn: Button, msg: String, restore: String) -> void:
+	btn.text = msg
+	var t := create_tween()
+	t.tween_interval(1.6)
+	t.tween_callback(func():
+		if is_instance_valid(btn):
+			btn.text = restore)
+
+func _open_name_change() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.70)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(dim)
+
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.11, 0.20)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.06, 0.05, 0.10)
+	psb.content_margin_left = 28; psb.content_margin_right = 28
+	psb.content_margin_top = 24;  psb.content_margin_bottom = 28
+	panel.add_theme_stylebox_override("panel", psb)
+	panel.position = Vector2(47, 300)
+	panel.custom_minimum_size = Vector2(320, 0)
+	ui.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "NEW NAME"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var input := LineEdit.new()
+	input.max_length = 12
+	input.text = GameState.player_name
+	input.placeholder_text = "PLAYER"
+	input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	input.add_theme_font_size_override("font_size", 22)
+	input.custom_minimum_size = Vector2(0, 52)
+	vbox.add_child(input)
+
+	var save_btn := _make_chunky_button("SAVE", Color(0.20, 0.85, 0.45), 22)
+	save_btn.custom_minimum_size = Vector2(0, 56)
+	vbox.add_child(save_btn)
+
+	var cancel := _make_chunky_button("CANCEL", Color(0.90, 0.30, 0.40), 18)
+	cancel.custom_minimum_size = Vector2(0, 48)
+	vbox.add_child(cancel)
+
+	var close_editor := func():
+		dim.queue_free()
+		panel.queue_free()
+
+	var confirm := func():
+		var n := input.text.strip_edges()
+		if not n.is_empty():
+			GameState.set_player_name(n)   # persists + _sync_online() upserts the leaderboard row
+			_refresh_profile()
+		Sfx.play_click()
+		close_editor.call()
+	save_btn.pressed.connect(confirm)
+	input.text_submitted.connect(func(_t): confirm.call())
+	cancel.pressed.connect(func():
+		Sfx.play_click()
+		close_editor.call())
+	input.grab_focus()
+
+# ── Account / cloud sign-in ──────────────────────────────────────────────────
+var account_overlay : Control
+var account_status  : Label
+
+func _open_account() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.70)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(dim)
+	account_overlay = dim
+
+	var panel := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.11, 0.20)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.06, 0.05, 0.10)
+	psb.content_margin_left = 24; psb.content_margin_right = 24
+	psb.content_margin_top = 22;  psb.content_margin_bottom = 24
+	panel.add_theme_stylebox_override("panel", psb)
+	panel.position = Vector2(37, 230)
+	panel.custom_minimum_size = Vector2(340, 0)
+	dim.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "ACCOUNT"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var body := Label.new()
+	body.text = "Sign in to back up your progress and keep it on any device. You can keep playing without it."
+	body.add_theme_font_size_override("font_size", 15)
+	body.add_theme_color_override("font_color", Color(1, 1, 1, 0.80))
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(296, 0)
+	vbox.add_child(body)
+
+	account_status = Label.new()
+	account_status.add_theme_font_size_override("font_size", 14)
+	account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	account_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(account_status)
+
+	if Auth.is_signed_in():
+		account_status.text = "Signed in (" + GameState.auth_provider + ") — backed up"
+		account_status.add_theme_color_override("font_color", Color(0.55, 0.9, 0.55))
+		var out := _make_chunky_button("SIGN OUT", Color(0.90, 0.30, 0.40), 18)
+		out.custom_minimum_size = Vector2(0, 50)
+		out.pressed.connect(func():
+			Sfx.play_click()
+			Auth.sign_out())
+		vbox.add_child(out)
+	else:
+		var apple := _make_chunky_button("SIGN IN WITH APPLE", Color(0.92, 0.92, 0.96), 18)
+		apple.custom_minimum_size = Vector2(0, 54)
+		apple.add_theme_color_override("font_color", Color(0.08, 0.07, 0.10))
+		apple.pressed.connect(func(): _start_sign_in("apple"))
+		vbox.add_child(apple)
+
+		var google := _make_chunky_button("SIGN IN WITH GOOGLE", Color(0.26, 0.52, 0.96), 18)
+		google.custom_minimum_size = Vector2(0, 54)
+		google.pressed.connect(func(): _start_sign_in("google"))
+		vbox.add_child(google)
+
+		# Paste-the-code fallback (works on any build without a deep-link plugin)
+		var code_input := LineEdit.new()
+		code_input.placeholder_text = "paste sign-in code"
+		code_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		code_input.add_theme_font_size_override("font_size", 16)
+		code_input.custom_minimum_size = Vector2(0, 46)
+		vbox.add_child(code_input)
+		var use_code := _make_chunky_button("USE CODE", Color(0.30, 0.80, 0.55), 16)
+		use_code.custom_minimum_size = Vector2(0, 46)
+		use_code.pressed.connect(func():
+			Sfx.play_click()
+			account_status.text = "Signing in…"
+			Auth.handle_redirect(code_input.text.strip_edges()))
+		vbox.add_child(use_code)
+
+	var close := _make_chunky_button("CLOSE", Color(0.55, 0.45, 0.75), 18)
+	close.custom_minimum_size = Vector2(0, 50)
+	close.pressed.connect(func():
+		Sfx.play_click()
+		_close_account())
+	vbox.add_child(close)
+
+func _start_sign_in(provider: String) -> void:
+	Sfx.play_click()
+	account_status.text = "Opening browser… sign in, then paste the code here."
+	account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	Auth.begin_sign_in(provider)
+
+func _close_account() -> void:
+	if account_overlay != null and is_instance_valid(account_overlay):
+		account_overlay.queue_free()
+	account_overlay = null
+	account_status = null
+
+func _on_auth_signed_in(restored: bool) -> void:
+	if is_instance_valid(account_status):
+		account_status.text = "Progress restored!" if restored else "Signed in — progress backed up!"
+		account_status.add_theme_color_override("font_color", Color(0.55, 0.9, 0.55))
+	if is_instance_valid(profile_name):
+		_refresh_profile()
+	if Net.is_configured():
+		Net.fetch_global(50)   # refresh rank/badge under the (now durable) id
+	var t := create_tween()
+	t.tween_interval(1.4)
+	t.tween_callback(_close_account)
+
+func _on_auth_failed(reason: String) -> void:
+	if is_instance_valid(account_status):
+		account_status.text = reason
+		account_status.add_theme_color_override("font_color", Color(1, 0.6, 0.4))
+
+func _on_auth_signed_out() -> void:
+	if is_instance_valid(account_status):
+		account_status.text = "Signed out"
+		account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+	if is_instance_valid(profile_name):
+		_refresh_profile()
 
 func _open_settings() -> void:
 	settings_box.visible = true

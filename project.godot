@@ -22,6 +22,7 @@ config/icon="res://icon.svg"
 
 Net="*res://scripts/Net.gd"
 GameState="*res://scripts/GameState.gd"
+Auth="*res://scripts/Auth.gd"
 Sfx="*res://scripts/Sfx.gd"
 Ads="*res://scripts/Ads.gd"
 

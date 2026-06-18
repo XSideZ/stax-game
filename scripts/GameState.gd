@@ -181,7 +181,80 @@ var last_xp_before : int = 0         # XP before the run's payout — drives the
 # friend_code is the short shareable code others enter to add you. Both persisted.
 var player_id   : String = ""
 var friend_code : String = ""
+var my_global_rank : int = 0   # last-known global leaderboard rank (0 = unknown); drives the profile pin
 const _CODE_ALPHABET := "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # no ambiguous 0/O/1/I/L
+
+# Account (Supabase Auth) — present once the player signs in to back up progress.
+var auth_refresh_token : String = ""
+var auth_provider      : String = ""   # "apple" | "google"
+
+func set_global_rank(r: int) -> void:
+	if r > 0 and r != my_global_rank:
+		my_global_rank = r
+		_save()
+
+func set_auth(refresh_token: String, provider: String) -> void:
+	auth_refresh_token = refresh_token
+	auth_provider = provider
+	_save()
+
+func clear_auth() -> void:
+	auth_refresh_token = ""
+	auth_provider = ""
+	_save()
+
+# Reinstall / new device: adopt the account's durable id so the leaderboard row + friends reattach.
+func adopt_account(pid: String, code: String) -> void:
+	if pid != "":
+		player_id = pid
+	if code != "":
+		friend_code = code
+	_save()
+
+# Snapshot of progress uploaded to the account profile.
+func cloud_snapshot() -> Dictionary:
+	return {
+		"best_score": best_score, "player_xp": player_xp, "games_played": games_played,
+		"total_score": total_score, "total_lines": total_lines,
+		"stat_blocks": stat_blocks, "stat_best_streak": stat_best_streak,
+		"stat_run_lines": stat_run_lines, "stat_board_clears": stat_board_clears,
+		"stat_best_multi": stat_best_multi, "stat_revives": stat_revives,
+		"stat_powers_used": stat_powers_used,
+		"unlocked": unlocked, "skins_seen": skins_seen,
+		"tutorial_done": tutorial_done, "player_name": player_name,
+		"theme_idx": theme_idx, "picked_skin": picked_skin, "skin_locked": skin_locked,
+	}
+
+# Merge a cloud snapshot into local state — field-wise MAX so a high score on any
+# device always survives; unlocks/skins union; tutorial flag OR'd. Then persist.
+func apply_cloud_profile(d: Dictionary) -> void:
+	best_score        = maxi(best_score,        int(d.get("best_score", 0)))
+	player_xp         = maxi(player_xp,         int(d.get("player_xp", 0)))
+	games_played      = maxi(games_played,      int(d.get("games_played", 0)))
+	total_score       = maxi(total_score,       int(d.get("total_score", 0)))
+	total_lines       = maxi(total_lines,       int(d.get("total_lines", 0)))
+	stat_blocks       = maxi(stat_blocks,       int(d.get("stat_blocks", 0)))
+	stat_best_streak  = maxi(stat_best_streak,  int(d.get("stat_best_streak", 0)))
+	stat_run_lines    = maxi(stat_run_lines,    int(d.get("stat_run_lines", 0)))
+	stat_board_clears = maxi(stat_board_clears, int(d.get("stat_board_clears", 0)))
+	stat_best_multi   = maxi(stat_best_multi,   int(d.get("stat_best_multi", 0)))
+	stat_revives      = maxi(stat_revives,      int(d.get("stat_revives", 0)))
+	stat_powers_used  = maxi(stat_powers_used,  int(d.get("stat_powers_used", 0)))
+	tutorial_done     = tutorial_done or bool(d.get("tutorial_done", false))
+	var u : Variant = d.get("unlocked", {})
+	if u is Dictionary:
+		for k in u:
+			unlocked[k] = true
+	var ss : Variant = d.get("skins_seen", [])
+	if ss is Array:
+		for v in ss:
+			if not skins_seen.has(v):
+				skins_seen.append(v)
+	if player_name == "":
+		var nm := str(d.get("player_name", ""))
+		if nm != "":
+			player_name = nm
+	_save()
 
 # Lifetime stats (profile card → stats panel, achievement quest values)
 var total_score       : int = 0     # every run's final score summed
@@ -635,6 +708,7 @@ func _reset_progress() -> void:
 	tutorial_done = false
 	review_state = 0
 	review_snooze_games = 0
+	my_global_rank = 0
 
 # ── Settings / meta persistence ───────────────────────────────────────────────
 # Crash-safe save: write the whole thing to a temp file, then promote it over the
@@ -675,6 +749,9 @@ func _save() -> void:
 	f.store_var(friend_code)
 	f.store_var(review_state)
 	f.store_var(review_snooze_games)
+	f.store_var(my_global_rank)
+	f.store_var(auth_refresh_token)
+	f.store_var(auth_provider)
 	var write_ok := f.get_error() == OK
 	f.close()
 	if not write_ok:   # write failed partway (disk full etc) — leave the live file untouched
@@ -776,4 +853,7 @@ func _read_save_fields(path: String) -> int:
 	if n > 25: friend_code         = vals[25]
 	if n > 26: review_state        = vals[26]
 	if n > 27: review_snooze_games = vals[27]
+	if n > 28: my_global_rank      = vals[28]
+	if n > 29: auth_refresh_token  = vals[29]
+	if n > 30: auth_provider       = vals[30]
 	return 1 if n > _EPOCH_VAL_IDX else 0
