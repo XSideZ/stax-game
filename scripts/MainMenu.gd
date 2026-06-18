@@ -1096,6 +1096,7 @@ func _open_achievements() -> void:
 # ── Biomes gallery ───────────────────────────────────────────────────────────
 # The whole gallery is gated until the player reaches this level.
 const BIOMES_UNLOCK_LEVEL := 3
+const LEADERBOARD_UNLOCK_LEVEL := 7
 
 # Rarity tiers (mirror GameState.SKIN_UNLOCK). Indices are skin ids; color tints
 # the section header so rarity reads at a glance.
@@ -1786,14 +1787,21 @@ func _build_buttons() -> void:
 		_open_achievements())
 	fade_in.append(ach)
 
-	var leaderboard := _make_chunky_button("LEADERBOARD", Color(0.95, 0.75, 0.25), 22)
+	var lb_ok := GameState.get_level() >= LEADERBOARD_UNLOCK_LEVEL
+	var leaderboard := _make_chunky_button(
+		"LEADERBOARD" if lb_ok else "LEADERBOARD   LV " + str(LEADERBOARD_UNLOCK_LEVEL),
+		Color(0.95, 0.75, 0.25) if lb_ok else Color(0.34, 0.34, 0.42), 22)
 	leaderboard.size = Vector2(280, 58)
 	leaderboard.position = Vector2(67, 660 if has_run else 598)
 	leaderboard.pivot_offset = leaderboard.size * 0.5
 	ui.add_child(leaderboard)
-	leaderboard.pressed.connect(func():
-		Sfx.play_click()
-		_open_leaderboard())
+	if lb_ok:
+		leaderboard.pressed.connect(func():
+			Sfx.play_click()
+			_open_leaderboard())
+	else:
+		_add_lock_badge(leaderboard)
+		leaderboard.pressed.connect(_deny_button.bind(leaderboard))
 	fade_in.append(leaderboard)
 
 	var biomes_ok := GameState.get_level() >= BIOMES_UNLOCK_LEVEL
