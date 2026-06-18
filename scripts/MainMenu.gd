@@ -2210,11 +2210,16 @@ func _on_auth_failed(reason: String) -> void:
 		account_status.add_theme_color_override("font_color", Color(1, 0.6, 0.4))
 
 func _on_auth_signed_out() -> void:
-	if is_instance_valid(account_status):
-		account_status.text = "Signed out"
-		account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	if is_instance_valid(profile_name):
 		_refresh_profile()
+	# Drop back to the account screen's signed-out state (the sign-in options),
+	# rather than leaving the signed-in layout up.
+	if account_overlay != null and is_instance_valid(account_overlay):
+		_close_account()
+		_open_account()
+		if is_instance_valid(account_status):
+			account_status.text = "Signed out"
+			account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 
 func _open_settings() -> void:
 	settings_box.visible = true
