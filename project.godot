@@ -30,6 +30,10 @@ Ads="*res://scripts/Ads.gd"
 
 gdscript/warnings/integer_division=0
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/admob/plugin.cfg")
+
 [display]
 
 window/size/viewport_width=414
@@ -44,4 +48,5 @@ theme/custom_font="res://assets/fonts/baloo2_semibold.tres"
 [rendering]
 
 renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
 environment/defaults/default_clear_color=Color(0.039216, 0.031373, 0.078431, 1)

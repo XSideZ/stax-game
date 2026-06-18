@@ -244,10 +244,14 @@ func _ready() -> void:
 	_init_orbs()
 	_build_pause_menu()
 	drag_layer = Node2D.new()
+	# Above the board's animated frame (Grid frame_rect), so a lifted piece
+	# floats over the border instead of being clipped under it.
+	drag_layer.z_index = 2
 	add_child(drag_layer)
 	drag_layer.draw.connect(_draw_drag_layer)
 	# Effects layer sits on top of everything (explosions, beams, slam streaks)
 	fx_layer = Node2D.new()
+	fx_layer.z_index = 3
 	add_child(fx_layer)
 	fx_layer.draw.connect(_draw_fx_layer)
 	# Score bounce should swell from the badge centre, not the corner

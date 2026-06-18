@@ -17,17 +17,56 @@ signal signed_out()
 # Where Supabase sends the browser after auth. For the TEST build set this to your
 # hosted code page (the HTML in SUPABASE_SETUP.md, dropped on Netlify) so the player
 # can copy the code and paste it in. For the seamless deep-link build: "stax://auth".
-const AUTH_REDIRECT := "https://YOUR-AUTH-PAGE.netlify.app"
+const AUTH_REDIRECT := "stax://auth"
 
 var access_token : String = ""
 var _verifier    : String = ""
 var _provider    : String = ""
 
 func _ready() -> void:
+	set_process(false)   # only poll the native auth bridge while a sign-in is in flight
 	# Resume a stored session on launch (silent — never errors out a guest)
 	if GameState.auth_refresh_token != "":
 		_refresh(GameState.auth_refresh_token)
 	_check_launch_args()
+
+# ── Native in-app auth bridge (ASWebAuthenticationSession via WebAuth.m) ────────
+# begin_sign_in writes the authorize URL to a file the native side polls; the native
+# ASWebAuthenticationSession sheet handles sign-in in-app and writes the stax://auth
+# callback URL back, which we poll for and feed to handle_redirect (no browser, no paste).
+func _bridge_dir() -> String:
+	var ud := OS.get_user_data_dir()
+	for marker in ["/Library/", "/Documents/"]:
+		var i := ud.find(marker)
+		if i > 0:
+			return ud.substr(0, i) + "/Documents"
+	return ud
+
+func _start_web_auth(url: String) -> void:
+	var f := FileAccess.open(_bridge_dir() + "/_webauth_req.txt", FileAccess.WRITE)
+	if f != null:
+		f.store_string(url)
+		f = null
+		set_process(true)
+	else:
+		OS.shell_open(url)   # fallback if the bridge dir isn't writable
+
+func _process(_delta: float) -> void:
+	var p := _bridge_dir() + "/_webauth_res.txt"
+	if not FileAccess.file_exists(p):
+		return
+	set_process(false)
+	var res := ""
+	var f := FileAccess.open(p, FileAccess.READ)
+	if f != null:
+		res = f.get_as_text().strip_edges()
+		f = null
+	DirAccess.remove_absolute(p)
+	if res == "" or res.begins_with("ERR"):
+		_verifier = ""
+		sign_in_failed.emit("cancelled")
+	else:
+		handle_redirect(res)
 
 func is_signed_in() -> bool:
 	return access_token != "" or GameState.auth_refresh_token != ""
@@ -44,10 +83,19 @@ func begin_sign_in(provider: String) -> void:
 		+ "&redirect_to=" + AUTH_REDIRECT.uri_encode() \
 		+ "&code_challenge=" + challenge \
 		+ "&code_challenge_method=S256"
-	OS.shell_open(url)
+	_start_web_auth(url)
 
 # Accepts the full redirect URL (deep link) OR just the pasted code.
 func handle_redirect(url_or_code: String) -> void:
+	# OAuth error came back in the redirect (e.g. provider declined) — surface it.
+	if "error=" in url_or_code and "code=" not in url_or_code:
+		var e := url_or_code.get_slice("error=", 1).get_slice("&", 0)
+		var d := ""
+		if "error_description=" in url_or_code:
+			d = ": " + url_or_code.get_slice("error_description=", 1).get_slice("&", 0).uri_decode()
+		_verifier = ""
+		sign_in_failed.emit("oauth: " + e.uri_decode() + d)
+		return
 	var code := url_or_code
 	if "code=" in url_or_code:
 		code = url_or_code.get_slice("code=", 1).get_slice("&", 0)
@@ -76,7 +124,11 @@ func _refresh(rt: String) -> void:
 func _on_session(ok: bool, res: Variant, silent: bool) -> void:
 	if not ok or typeof(res) != TYPE_DICTIONARY or not (res as Dictionary).has("access_token"):
 		if not silent:
-			sign_in_failed.emit("sign-in failed")
+			var detail := ""
+			if typeof(res) == TYPE_DICTIONARY:
+				var rd := res as Dictionary
+				detail = str(rd.get("error_description", rd.get("error_code", rd.get("msg", rd.get("error", "")))))
+			sign_in_failed.emit("sign-in failed" + ("" if detail == "" else ": " + detail))
 		return
 	var d := res as Dictionary
 	access_token = str(d["access_token"])

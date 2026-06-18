@@ -1981,13 +1981,6 @@ func _build_settings_panel() -> void:
 	rename_btn.pressed.connect(func(): _on_change_name_pressed(rename_btn))
 	vbox.add_child(rename_btn)
 
-	var hint := Label.new()
-	hint.text = "watch an ad to rename"
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.40))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(hint)
-
 	var account := _make_chunky_button("ACCOUNT", Color(0.40, 0.55, 0.95), 20)
 	account.custom_minimum_size = Vector2(0, 56)
 	account.pressed.connect(func():
@@ -1995,13 +1988,6 @@ func _build_settings_panel() -> void:
 		settings_box.visible = false
 		_open_account())
 	vbox.add_child(account)
-
-	var account_hint := Label.new()
-	account_hint.text = "back up your progress"
-	account_hint.add_theme_font_size_override("font_size", 12)
-	account_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.40))
-	account_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(account_hint)
 
 	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 20)
 	close.custom_minimum_size = Vector2(0, 56)
@@ -2187,21 +2173,6 @@ func _open_account() -> void:
 		google.pressed.connect(func(): _start_sign_in("google"))
 		vbox.add_child(google)
 
-		# Paste-the-code fallback (works on any build without a deep-link plugin)
-		var code_input := LineEdit.new()
-		code_input.placeholder_text = "paste sign-in code"
-		code_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
-		code_input.add_theme_font_size_override("font_size", 16)
-		code_input.custom_minimum_size = Vector2(0, 46)
-		vbox.add_child(code_input)
-		var use_code := _make_chunky_button("USE CODE", Color(0.30, 0.80, 0.55), 16)
-		use_code.custom_minimum_size = Vector2(0, 46)
-		use_code.pressed.connect(func():
-			Sfx.play_click()
-			account_status.text = "Signing in…"
-			Auth.handle_redirect(code_input.text.strip_edges()))
-		vbox.add_child(use_code)
-
 	var close := _make_chunky_button("CLOSE", Color(0.55, 0.45, 0.75), 18)
 	close.custom_minimum_size = Vector2(0, 50)
 	close.pressed.connect(func():
@@ -2211,7 +2182,7 @@ func _open_account() -> void:
 
 func _start_sign_in(provider: String) -> void:
 	Sfx.play_click()
-	account_status.text = "Opening browser… sign in, then paste the code here."
+	account_status.text = "Signing in…"
 	account_status.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
 	Auth.begin_sign_in(provider)
 
