@@ -15,9 +15,19 @@ const COLORS: Array = [
 const ORB_COUNT := 10
 const FALL_COUNT := 12
 
-# ── Dev skin changer — hidden by default; revealed via the secret tap sequence
-# (tap each letter twice, backwards: X X A A T T S S). Force-on with `true`. ────
-const SHOW_SKIN_PICKER := false
+# In-app review prompt → store deep links. FILL THESE IN once the listings exist:
+#   IOS_APP_ID      = the App Store numeric id (App Store Connect), e.g. "1234567890"
+#   ANDROID_PACKAGE = your applicationId, e.g. "com.lotus.stax"
+# Ratings of REVIEW_STORE_THRESHOLD+ stars open the store write-review page;
+# lower ratings just thank the player (keeps low scores off the public listing).
+const IOS_APP_ID             := "6778501101"
+const ANDROID_PACKAGE        := ""
+const REVIEW_STORE_THRESHOLD := 4
+# Custom-drawn rating stars (cuter than a glyph + tap-to-fill interaction)
+const STAR_COUNT := 5
+const STAR_GAP   := 56.0
+const STAR_R     := 23.0
+
 const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 	"CANDY", "FROST", "GRASS", "WATER", "LAVA", "WOOD", "GALAXY",
 	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO",
@@ -31,10 +41,6 @@ var time_t  : float = 0.0
 var letters      : Array = []   # {lbl, base_pos, phase}
 var bobbing      : bool  = false
 var cat_progress : int   = 0    # secret: tap S-T-A-X in order to toggle cat mode
-# secret dev-skins reveal: tap each letter twice, backwards — X X A A T T S S
-const DEV_SEQUENCE : Array = [3, 3, 2, 2, 1, 1, 0, 0]
-var dev_progress : int   = 0
-var dev_skins_shown : bool = false
 var settings_box : PanelContainer
 var play_pulse   : Tween
 var faller_layer : Node2D
@@ -76,8 +82,7 @@ func _build_menu() -> void:
 	_build_biomes_panel()
 	_build_leaderboard_panel()
 	_build_stats_panel()
-	if SHOW_SKIN_PICKER:
-		_build_skin_picker()
+	_maybe_show_review()
 
 func _make_faller(anywhere: bool) -> Dictionary:
 	return {
@@ -208,24 +213,6 @@ func _on_letter_tapped(idx: int) -> void:
 		# Wrong order — start over (but a first-letter tap still counts)
 		cat_progress = 1 if idx == 0 else 0
 
-	# Secret dev-skins sequence (tracked independently of the cat one)
-	if idx == DEV_SEQUENCE[dev_progress]:
-		dev_progress += 1
-		if dev_progress >= DEV_SEQUENCE.size():
-			dev_progress = 0
-			_reveal_dev_skins()
-	else:
-		dev_progress = 1 if idx == DEV_SEQUENCE[0] else 0
-
-func _reveal_dev_skins() -> void:
-	if dev_skins_shown:
-		return
-	dev_skins_shown = true
-	_build_skin_picker()
-	Sfx.play_best()
-	if GameState.haptics_on:
-		Input.vibrate_handheld(40)
-
 func _toggle_cat_mode() -> void:
 	# The bg, orbs and falling pieces all read the skin live each frame, so the
 	# whole menu recolours to (or from) the cat theme instantly — no rebuild.
@@ -259,6 +246,219 @@ func _show_meow_popup() -> void:
 	t.tween_interval(0.7)
 	t.tween_property(lbl, "modulate:a", 0.0, 0.4)
 	t.tween_callback(lbl.queue_free)
+
+# ── In-app review prompt (after the tutorial's first full run) ───────────────
+var review_overlay : Control
+var review_stars   : Control
+var _star_fill     : float = 0.0   # animated number of filled stars (0..5)
+var _star_locked   : bool  = false # true once a rating is committed
+
+func _maybe_show_review() -> void:
+	if not GameState.should_ask_review():
+		return
+	# Let the menu settle in first, then slide the ask up
+	var t := create_tween()
+	t.tween_interval(0.7)
+	t.tween_callback(_show_review_prompt)
+
+func _show_review_prompt() -> void:
+	if review_overlay != null and is_instance_valid(review_overlay):
+		return
+	review_overlay = Control.new()
+	review_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	review_overlay.mouse_filter = Control.MOUSE_FILTER_STOP   # swallow taps behind it
+	ui.add_child(review_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.0)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	review_overlay.add_child(dim)
+	create_tween().tween_property(dim, "color", Color(0, 0, 0, 0.6), 0.25)
+
+	var box := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.11, 0.20)
+	psb.set_corner_radius_all(24)
+	psb.border_width_bottom = 8
+	psb.border_color = Color(0.06, 0.05, 0.10)
+	psb.content_margin_left = 22; psb.content_margin_right = 22
+	psb.content_margin_top = 20;  psb.content_margin_bottom = 22
+	box.add_theme_stylebox_override("panel", psb)
+	box.position = Vector2(37, 250)
+	box.custom_minimum_size = Vector2(340, 0)
+	box.pivot_offset = Vector2(170, 150)
+	box.scale = Vector2(0.85, 0.85)
+	review_overlay.add_child(box)
+	create_tween().tween_property(box, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	box.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "ENJOYING STAX?"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var body := Label.new()
+	body.text = "Leaving a review really helps a small game like ours grow. Hope you're having fun!"
+	body.add_theme_font_size_override("font_size", 16)
+	body.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(296, 0)
+	vbox.add_child(body)
+
+	review_stars = Control.new()
+	review_stars.custom_minimum_size = Vector2(280, 74)
+	review_stars.size_flags_horizontal = Control.SIZE_FILL
+	review_stars.mouse_filter = Control.MOUSE_FILTER_STOP
+	_star_fill = 0.0
+	_star_locked = false
+	vbox.add_child(review_stars)
+	review_stars.draw.connect(_draw_review_stars)
+	review_stars.gui_input.connect(_on_star_input)
+
+	var later := _make_chunky_button("MAYBE LATER", Color(0.40, 0.55, 0.95), 16)
+	later.custom_minimum_size = Vector2(0, 46)
+	later.pressed.connect(func():
+		Sfx.play_click()
+		GameState.snooze_review()
+		_close_review())
+	vbox.add_child(later)
+
+	var never := Button.new()
+	never.text = "Don't ask again"
+	never.flat = true
+	never.add_theme_font_size_override("font_size", 14)
+	never.add_theme_color_override("font_color", Color(1, 1, 1, 0.50))
+	never.add_theme_color_override("font_hover_color", Color(1, 1, 1, 0.75))
+	never.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	never.pressed.connect(func():
+		Sfx.play_click()
+		GameState.finish_review()
+		_close_review())
+	vbox.add_child(never)
+
+# ── Cute custom rating stars ─────────────────────────────────────────────────
+# A soft, bubbly 5-point star: every corner (tips AND inner valleys) is rounded
+# off with a little quadratic-bezier fillet, so nothing reads as sharp.
+func _bubbly_star_points(center: Vector2, r_out: float, r_in: float, round_amt: float) -> PackedVector2Array:
+	var base : Array = []
+	for k in 10:
+		var ang := -PI / 2.0 + float(k) * PI / 5.0
+		var rad := r_out if k % 2 == 0 else r_in
+		base.append(center + Vector2(cos(ang), sin(ang)) * rad)
+	var pts := PackedVector2Array()
+	var n := base.size()
+	for k in n:
+		var cur  : Vector2 = base[k]
+		var prev : Vector2 = base[(k - 1 + n) % n]
+		var nxt  : Vector2 = base[(k + 1) % n]
+		var d := minf((prev - cur).length(), (nxt - cur).length()) * round_amt
+		var p_a := cur + (prev - cur).normalized() * d
+		var p_b := cur + (nxt - cur).normalized() * d
+		var steps := 6
+		for s in steps + 1:
+			var t := float(s) / float(steps)
+			# quadratic bezier p_a → cur (control) → p_b rounds the corner
+			pts.append(p_a.lerp(cur, t).lerp(cur.lerp(p_b, t), t))
+	return pts
+
+func _draw_review_stars() -> void:
+	var total_w := STAR_GAP * float(STAR_COUNT - 1)
+	var x0 := (review_stars.size.x - total_w) * 0.5
+	var cy := review_stars.size.y * 0.5
+	for i in STAR_COUNT:
+		var a := clampf(_star_fill - float(i), 0.0, 1.0)        # 0 empty → 1 full
+		var sc := 0.84 + 0.16 * a                                # filled stars sit a touch bigger
+		var center := Vector2(x0 + float(i) * STAR_GAP, cy)
+		var r := STAR_R * sc
+		var hue : Color = COLORS[i % COLORS.size()]              # rainbow, matching the logo
+		var pts := _bubbly_star_points(center, r, r * 0.55, 0.5)
+		# Soft halo behind a lit star — fakes a glow without a blur pass
+		if a > 0.02:
+			var halo := _bubbly_star_points(center, r * 1.18, r * 1.18 * 0.55, 0.5)
+			review_stars.draw_colored_polygon(halo, Color(hue.r, hue.g, hue.b, 0.18 * a))
+		# Body: faint tinted outline when empty → full colour when filled
+		var fill := Color(hue.r, hue.g, hue.b, 0.12).lerp(hue, a)
+		review_stars.draw_colored_polygon(pts, fill)
+		# Gentle colour-matched outline (no harsh black edge)
+		var outline := pts.duplicate()
+		outline.append(pts[0])
+		var ol_col := Color(hue.r, hue.g, hue.b, 0.35).lerp(hue.darkened(0.30), a)
+		review_stars.draw_polyline(outline, ol_col, 2.5, true)
+		# Bubbly gloss highlight
+		if a > 0.05:
+			review_stars.draw_circle(center + Vector2(-r * 0.26, -r * 0.32), r * 0.18, Color(1, 1, 1, 0.6 * a))
+
+func _star_at(x: float) -> int:
+	var total_w := STAR_GAP * float(STAR_COUNT - 1)
+	var x0 := (review_stars.size.x - total_w) * 0.5
+	return clampi(int(round((x - x0) / STAR_GAP)), 0, STAR_COUNT - 1)
+
+func _set_star_fill(v: float) -> void:
+	_star_fill = v
+	if is_instance_valid(review_stars):
+		review_stars.queue_redraw()
+
+func _on_star_input(ev: InputEvent) -> void:
+	if _star_locked:
+		return
+	if ev is InputEventMouseMotion or ev is InputEventScreenDrag:
+		_set_star_fill(float(_star_at(ev.position.x) + 1))   # hover/drag previews the fill
+	elif (ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT) \
+			or (ev is InputEventScreenTouch and ev.pressed):
+		_select_star(_star_at(ev.position.x) + 1)
+
+func _select_star(n: int) -> void:
+	if _star_locked:
+		return
+	_star_locked = true
+	Sfx.play_tick()
+	var t := create_tween()
+	# Sweep the fill up to the chosen star…
+	t.tween_method(_set_star_fill, _star_fill, float(n), 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# …then a happy pop of the whole row
+	t.tween_callback(func():
+		review_stars.pivot_offset = review_stars.size * 0.5
+		var p := create_tween()
+		p.tween_property(review_stars, "scale", Vector2(1.12, 1.12), 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		p.tween_property(review_stars, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK))
+	t.tween_interval(0.34)
+	t.tween_callback(func(): _on_review_star(n))
+
+func _on_review_star(n: int) -> void:
+	GameState.finish_review()       # asked + answered → never auto-ask again
+	if n >= REVIEW_STORE_THRESHOLD:
+		_open_store_review()
+	_close_review()
+
+func _open_store_review() -> void:
+	var url := ""
+	match OS.get_name():
+		"iOS":
+			if IOS_APP_ID != "":
+				url = "itms-apps://itunes.apple.com/app/id" + IOS_APP_ID + "?action=write-review"
+		"Android":
+			if ANDROID_PACKAGE != "":
+				url = "market://details?id=" + ANDROID_PACKAGE
+		_:
+			if IOS_APP_ID != "":   # desktop dev fallback — open the web listing
+				url = "https://apps.apple.com/app/id" + IOS_APP_ID
+	if url != "":
+		OS.shell_open(url)
+
+func _close_review() -> void:
+	if review_overlay == null or not is_instance_valid(review_overlay):
+		return
+	var ov := review_overlay
+	review_overlay = null
+	var t := create_tween()
+	t.tween_property(ov, "modulate:a", 0.0, 0.2)
+	t.tween_callback(ov.queue_free)
 
 # ── Player profile card: name + level chip + XP bar + best, tap for stats ───
 var profile_name : Label
@@ -540,6 +740,43 @@ var lb_global_btn : Button
 var lb_friends_btn: Button
 var lb_code_input : LineEdit
 var lb_tab        : String = "global"   # "global" | "friends"
+
+# Swipe-to-switch between the leaderboard tabs (mirrors Game.gd's touch pattern)
+const LB_TABS : Array[String] = ["global", "friends"]
+const LB_SWIPE_MIN := 60.0
+var _lb_swipe_start : Vector2 = Vector2.ZERO
+var _lb_swiping     : bool    = false
+
+func _input(event: InputEvent) -> void:
+	if lb_box == null or not lb_box.visible:
+		return
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_lb_swipe_start = event.position
+			_lb_swiping = true
+		elif _lb_swiping:
+			_lb_swiping = false
+			_try_lb_swipe(event.position - _lb_swipe_start)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_lb_swipe_start = event.position
+			_lb_swiping = true
+		elif _lb_swiping:
+			_lb_swiping = false
+			_try_lb_swipe(event.position - _lb_swipe_start)
+
+func _try_lb_swipe(delta: Vector2) -> void:
+	# Only a clearly-horizontal drag past the threshold counts (leaves vertical
+	# list scrolling untouched). Swipe left → next tab, swipe right → previous.
+	if absf(delta.x) < LB_SWIPE_MIN or absf(delta.x) < absf(delta.y) * 1.2:
+		return
+	var idx := LB_TABS.find(lb_tab)
+	if idx < 0: idx = 0
+	var step := 1 if delta.x < 0.0 else -1
+	var new_idx := clampi(idx + step, 0, LB_TABS.size() - 1)
+	if new_idx != idx:
+		Sfx.play_click()
+		_set_lb_tab(LB_TABS[new_idx])
 
 func _build_achievements_panel() -> void:
 	ach_box = PanelContainer.new()
@@ -1087,6 +1324,13 @@ func _build_leaderboard_panel() -> void:
 	lb_friends_btn.pressed.connect(func(): _set_lb_tab("friends"))
 	tabs.add_child(lb_friends_btn)
 
+	var swipe_hint := Label.new()
+	swipe_hint.text = "swipe to switch"
+	swipe_hint.add_theme_font_size_override("font_size", 13)
+	swipe_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
+	swipe_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(swipe_hint)
+
 	# Your shareable code + copy
 	var code_row := HBoxContainer.new()
 	code_row.add_theme_constant_override("separation", 6)
@@ -1188,6 +1432,9 @@ func _populate_board(rows: Array, is_friends: bool) -> void:
 		lb_status.text = "No friends yet — add some by code!" if is_friends else "No scores yet"
 		return
 	lb_status.text = ""
+	# Fade the list in so swiping between tabs reads like a page turn
+	lb_rows.modulate.a = 0.0
+	create_tween().tween_property(lb_rows, "modulate:a", 1.0, 0.18)
 	for row in rows:
 		var rank : int    = int(row.get("rank", 0))
 		var nm   : String = str(row.get("name", "?"))
@@ -1582,98 +1829,3 @@ func _open_settings() -> void:
 	var t := create_tween()
 	t.tween_property(settings_box, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
-# ── Dev skin picker (hidden when SHOW_SKIN_PICKER = false) ───────────────────
-var skin_box   : PanelContainer
-var skin_label : Label
-
-func _build_skin_picker() -> void:
-	var open_btn := _make_chunky_button("SKINS", Color(0.55, 0.45, 0.75), 15)
-	open_btn.size = Vector2(96, 42)
-	open_btn.position = Vector2(10, 844)
-	open_btn.pivot_offset = open_btn.size * 0.5
-	ui.add_child(open_btn)
-	open_btn.pressed.connect(func():
-		Sfx.play_click()
-		skin_box.visible = not skin_box.visible)
-
-	skin_box = PanelContainer.new()
-	var psb := StyleBoxFlat.new()
-	psb.bg_color = Color(0.12, 0.10, 0.18)
-	psb.set_corner_radius_all(20)
-	psb.border_width_bottom = 8
-	psb.border_color = Color(0.06, 0.05, 0.10)
-	psb.content_margin_left = 18; psb.content_margin_right = 18
-	psb.content_margin_top = 16;  psb.content_margin_bottom = 20
-	skin_box.add_theme_stylebox_override("panel", psb)
-	skin_box.position = Vector2(37, 250)
-	skin_box.custom_minimum_size = Vector2(340, 0)
-	skin_box.visible = false
-	ui.add_child(skin_box)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
-	skin_box.add_child(vbox)
-
-	var title := Label.new()
-	title.text = "SKINS  (DEV)"
-	title.add_theme_font_size_override("font_size", 22)
-	title.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
-
-	skin_label = Label.new()
-	skin_label.text = _skin_current_text()
-	skin_label.add_theme_font_size_override("font_size", 14)
-	skin_label.add_theme_color_override("font_color", Color(0.55, 0.80, 0.95, 0.9))
-	skin_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(skin_label)
-
-	# Scrollable so the (now 30+) skins all fit on screen
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.custom_minimum_size = Vector2(304, 396)
-	vbox.add_child(scroll)
-
-	var grid_c := GridContainer.new()
-	grid_c.columns = 3
-	grid_c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# PASS so a touch-drag starting on the grid still reaches the ScrollContainer
-	grid_c.mouse_filter = Control.MOUSE_FILTER_PASS
-	grid_c.add_theme_constant_override("h_separation", 8)
-	grid_c.add_theme_constant_override("v_separation", 8)
-	scroll.add_child(grid_c)
-
-	var auto_btn := _make_chunky_button("AUTO", Color(0.20, 0.85, 0.45), 13)
-	auto_btn.custom_minimum_size = Vector2(96, 40)
-	auto_btn.mouse_filter = Control.MOUSE_FILTER_PASS   # let drags scroll, taps still select
-	auto_btn.pressed.connect(func():
-		GameState.dev_skin_override = -1
-		skin_label.text = _skin_current_text()
-		Sfx.play_click())
-	grid_c.add_child(auto_btn)
-
-	for i in SKIN_NAMES.size():
-		var col := Color(0.20, 0.75, 0.95) if GameState.is_skin_unlocked(i) else Color(0.40, 0.40, 0.48)
-		var b := _make_chunky_button(SKIN_NAMES[i], col, 13)
-		b.custom_minimum_size = Vector2(96, 40)
-		b.mouse_filter = Control.MOUSE_FILTER_PASS   # drag scrolls, tap selects
-		if not GameState.is_skin_unlocked(i):
-			b.modulate = Color(1, 1, 1, 0.55)   # locked (dev can still pick it)
-		var idx := i
-		b.pressed.connect(func():
-			GameState.dev_skin_override = idx
-			skin_label.text = _skin_current_text()
-			Sfx.play_click())
-		grid_c.add_child(b)
-
-	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 14)
-	close.custom_minimum_size = Vector2(0, 44)
-	close.pressed.connect(func():
-		Sfx.play_click()
-		skin_box.visible = false)
-	vbox.add_child(close)
-
-func _skin_current_text() -> String:
-	if GameState.dev_skin_override < 0:
-		return "CURRENT:  AUTO (follows theme)"
-	return "CURRENT:  " + SKIN_NAMES[GameState.dev_skin_override]

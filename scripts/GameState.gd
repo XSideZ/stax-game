@@ -17,8 +17,11 @@ var revive_used : bool = false
 var tutorial_active : bool = false
 var tutorial_done   : bool = false
 
-# Dev skin changer (main-menu picker, session-only): -1 = follow the theme
-var dev_skin_override : int = -1
+# In-app review prompt: 0 = not asked, 1 = snoozed ("maybe later"), 2 = done /
+# rated / "don't ask again". review_snooze_games stores games_played at snooze
+# time so we can re-ask after a few more runs. Both persisted.
+var review_state        : int = 0
+var review_snooze_games : int = 0
 
 # Player biome (skin) choice from the Biomes gallery (persisted).
 #   picked_skin  = the chosen skin index (-1 = none chosen yet)
@@ -42,12 +45,10 @@ func active_skin(theme_i: int) -> int:
 	return effective_skin(theme_i)
 
 # Single source of truth for "which skin to show" given the rotation index.
-# Priority: cat easter egg > dev picker > player lock > AUTO rotation.
+# Priority: cat easter egg > player lock > AUTO rotation.
 func effective_skin(rot: int) -> int:
 	if cat_mode:
 		return CAT_SKIN
-	if dev_skin_override >= 0:
-		return dev_skin_override
 	if skin_locked and picked_skin >= 0:
 		return picked_skin
 	return rot % THEMES.size()
@@ -60,7 +61,6 @@ func select_skin(idx: int) -> void:
 	picked_skin       = idx
 	theme_idx         = idx
 	theme_bag         = []     # reshuffle so the pick doesn't instantly repeat
-	dev_skin_override = -1      # a real pick clears any leftover dev override
 	_save()
 
 func set_skin_locked(on: bool) -> void:
@@ -356,6 +356,35 @@ func finish_run(moves: int, final_score: int, run_lines: int = 0,
 	pending_toasts.append_array(check_skin_unlocks())
 	_save()
 
+# Watched the "double XP" rewarded ad on a terminal game over (revive already
+# spent). Adds the run's XP gain a second time so the payout is 2×. Returns the
+# bonus granted. Only meaningful immediately after finish_run, same run.
+func grant_double_xp() -> int:
+	var bonus := last_xp_gain
+	player_xp   += bonus
+	last_xp_gain += bonus
+	_save()
+	return bonus
+
+# ── In-app review prompt gating ──────────────────────────────────────────────
+# Ask once after the tutorial's first full run, then re-ask a few runs later if
+# they snoozed. Never again once they've rated or chosen "don't ask again".
+func should_ask_review() -> bool:
+	if not tutorial_done or games_played < 1 or review_state == 2:
+		return false
+	if review_state == 0:
+		return true
+	return games_played >= review_snooze_games + 3   # snoozed → re-ask later
+
+func snooze_review() -> void:
+	review_state = 1
+	review_snooze_games = games_played
+	_save()
+
+func finish_review() -> void:   # rated or "don't ask again" → never again
+	review_state = 2
+	_save()
+
 # Theme progression persists across runs — backgrounds keep rotating
 # no matter how short each game is
 var theme_idx   : int = 0
@@ -380,6 +409,8 @@ var save_seeds         : Array  = []   # per-cell skin pattern seeds
 var save_meter         : float  = 0.0  # power-meter charge (0..1)
 
 const SAVE_PATH  := "user://stax_save.dat"
+const SAVE_TMP   := "user://stax_save.dat.tmp"   # written first, then promoted (atomic-ish)
+const SAVE_BAK   := "user://stax_save.dat.bak"   # last known-good, recovered from on corruption
 const RUN_PATH   := "user://stax_run.dat"
 const MAX_SCORES := 10
 
@@ -601,12 +632,17 @@ func _reset_progress() -> void:
 	skins_seen = []
 	picked_skin = -1
 	skin_locked = false
-	dev_skin_override = -1
 	tutorial_done = false
+	review_state = 0
+	review_snooze_games = 0
 
 # ── Settings / meta persistence ───────────────────────────────────────────────
+# Crash-safe save: write the whole thing to a temp file, then promote it over the
+# live file, keeping the previous good copy as .bak. Because the live file is only
+# ever replaced by a fully-written temp, a crash mid-write can never leave it
+# truncated — which is what used to trip the epoch reset and wipe everyone's data.
 func _save() -> void:
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(SAVE_TMP, FileAccess.WRITE)
 	if f == null:
 		return
 	f.store_var(best_score)
@@ -637,73 +673,107 @@ func _save() -> void:
 	f.store_var(tutorial_done)
 	f.store_var(player_id)
 	f.store_var(friend_code)
+	f.store_var(review_state)
+	f.store_var(review_snooze_games)
+	var write_ok := f.get_error() == OK
 	f.close()
+	if not write_ok:   # write failed partway (disk full etc) — leave the live file untouched
+		return
+
+	var d := DirAccess.open("user://")
+	if d == null:
+		return
+	# Refresh the backup from the current good save before we replace it.
+	if d.file_exists(SAVE_PATH):
+		if d.file_exists(SAVE_BAK):
+			d.remove(SAVE_BAK)
+		d.copy(SAVE_PATH, SAVE_BAK)
+		d.remove(SAVE_PATH)
+	d.rename(SAVE_TMP, SAVE_PATH)
+
+# Index of save_epoch within the optional-tail value list (the two mandatory
+# header fields best_score/scores are read separately first).
+const _EPOCH_VAL_IDX := 22
 
 func _load() -> void:
-	if not FileAccess.file_exists(SAVE_PATH):
-		return
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
-	if f == null:
-		return
-	best_score = f.get_var()
-	scores     = f.get_var()
-	# Fields below were added over time — older save files end early
-	if f.get_position() < f.get_length():
-		sound_on = f.get_var()
-	if f.get_position() < f.get_length():
-		music_on = f.get_var()
-	if f.get_position() < f.get_length():
-		theme_idx = f.get_var()
-	if f.get_position() < f.get_length():
-		total_lines = f.get_var()
-	if f.get_position() < f.get_length():
-		haptics_on = f.get_var()
-	if f.get_position() < f.get_length():
-		player_name = f.get_var()
-	if f.get_position() < f.get_length():
-		player_xp = f.get_var()
-	if f.get_position() < f.get_length():
-		games_played = f.get_var()
-	if f.get_position() < f.get_length():
-		unlocked = f.get_var()
-	if f.get_position() < f.get_length():
-		total_score = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_blocks = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_best_streak = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_run_lines = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_board_clears = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_best_multi = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_revives = f.get_var()
-	if f.get_position() < f.get_length():
-		cat_mode = f.get_var()
-	if f.get_position() < f.get_length():
-		theme_bag = f.get_var()
-	if f.get_position() < f.get_length():
-		stat_powers_used = f.get_var()
-	if f.get_position() < f.get_length():
-		skins_seen = f.get_var()
-	if f.get_position() < f.get_length():
-		picked_skin = f.get_var()
-	if f.get_position() < f.get_length():
-		skin_locked = f.get_var()
-	if f.get_position() < f.get_length():
-		save_epoch = f.get_var()
-	if f.get_position() < f.get_length():
-		tutorial_done = f.get_var()
-	if f.get_position() < f.get_length():
-		player_id = f.get_var()
-	if f.get_position() < f.get_length():
-		friend_code = f.get_var()
-	f.close()
-	# One-time global reset after the XP rework — anyone on an older epoch starts
-	# fresh at level 1 (settings + name kept).
-	if save_epoch < RESET_EPOCH:
+	# Prefer the live save; if it's missing or corrupt (e.g. a crash mid-promote),
+	# recover from the freshly-written temp or the last-good backup. A COMPLETE read
+	# (one that reached the epoch field) always wins over a partial one.
+	var best_code := -1
+	for path : String in [SAVE_PATH, SAVE_TMP, SAVE_BAK]:
+		if not FileAccess.file_exists(path):
+			continue
+		var c := _read_save_fields(path)
+		if c > best_code:
+			best_code = c
+		if c == 1:
+			break   # complete read — good enough, stop looking
+	if best_code < 0:
+		return   # nothing usable anywhere → genuine fresh install
+	# Epoch reset is the one-time pre-rework wipe. ONLY honour it on a COMPLETE read
+	# (we reached the epoch field). A short/partial read must NEVER wipe real data —
+	# that silent path is what nuked the 300k save.
+	if best_code == 1 and save_epoch < RESET_EPOCH:
 		_reset_progress()
 		save_epoch = RESET_EPOCH
 		_save()
+
+# Reads a save file into the live state. Returns -1 if it can't even read the two
+# mandatory fields (treat as invalid — caller tries a fallback), 0 if it read a
+# valid-but-short save (epoch field not reached), 1 if it reached the epoch field.
+# Reads the optional tail generically and stops at the first missing/partial value,
+# so a half-written var can never throw or get assigned as null.
+func _read_save_fields(path: String) -> int:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null or f.get_length() < 1:
+		if f != null:
+			f.close()
+		return -1
+	var bs : Variant = f.get_var()
+	var sc : Variant = f.get_var()
+	if not (bs is int or bs is float) or not (sc is Array):
+		f.close()
+		return -1   # corrupt header — don't touch live state, let caller try a fallback
+	best_score = int(bs)
+	scores     = sc
+	# Read the remaining (optional) fields in order; bail on the first value that's
+	# absent or only partially written (get_var → null), since everything after it
+	# is gone too. This is the truncation-safe path.
+	var vals : Array = []
+	while f.get_position() < f.get_length():
+		var v : Variant = f.get_var()
+		if v == null:
+			break
+		vals.append(v)
+	f.close()
+
+	var n := vals.size()
+	if n > 0:  sound_on            = vals[0]
+	if n > 1:  music_on            = vals[1]
+	if n > 2:  theme_idx           = vals[2]
+	if n > 3:  total_lines         = vals[3]
+	if n > 4:  haptics_on          = vals[4]
+	if n > 5:  player_name         = vals[5]
+	if n > 6:  player_xp           = vals[6]
+	if n > 7:  games_played        = vals[7]
+	if n > 8:  unlocked            = vals[8]
+	if n > 9:  total_score         = vals[9]
+	if n > 10: stat_blocks         = vals[10]
+	if n > 11: stat_best_streak    = vals[11]
+	if n > 12: stat_run_lines      = vals[12]
+	if n > 13: stat_board_clears   = vals[13]
+	if n > 14: stat_best_multi     = vals[14]
+	if n > 15: stat_revives        = vals[15]
+	if n > 16: cat_mode            = vals[16]
+	if n > 17: theme_bag           = vals[17]
+	if n > 18: stat_powers_used    = vals[18]
+	if n > 19: skins_seen          = vals[19]
+	if n > 20: picked_skin         = vals[20]
+	if n > 21: skin_locked         = vals[21]
+	if n > _EPOCH_VAL_IDX: save_epoch = vals[_EPOCH_VAL_IDX]
+	if n > 23: tutorial_done       = vals[23]
+	if n > 24: player_id           = vals[24]
+	if n > 25: friend_code         = vals[25]
+	if n > 26: review_state        = vals[26]
+	if n > 27: review_snooze_games = vals[27]
+	return 1 if n > _EPOCH_VAL_IDX else 0

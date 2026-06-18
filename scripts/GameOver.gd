@@ -22,6 +22,11 @@ var orbs         : Array = []
 var fallers      : Array = []
 var faller_layer : Node2D
 
+# Ad button mode: "revive" (first death) or "double_xp" (after a revive's spent).
+# Only ever one ad offer on screen at a time.
+var ad_mode      : String = ""
+var _dx_claimed  : bool   = false
+
 func _ready() -> void:
 	for _i in 8:
 		orbs.append({
@@ -90,13 +95,25 @@ func _ready() -> void:
 		_show_achievement_toast(GameState.pending_toasts[i], 0.9 + float(i) * 1.1)
 	GameState.pending_toasts = []
 
-	# One revive per run, and only when an ad can actually be offered
-	if GameState.revive_used or not Ads.can_offer_rewarded():
-		ad_button.visible = false
-		retry_button.position.y -= 82.0
-		menu_button.position.y  -= 82.0
+	# Ad offer: first death → revive; once the revive's been spent, the next
+	# death offers a single "double your XP" ad instead. Never two on one screen.
+	if not Ads.can_offer_rewarded():
+		_hide_ad_button()
+	elif not GameState.revive_used:
+		ad_mode = "revive"
+		ad_button.text = "WATCH AD TO CONTINUE"
+	elif GameState.last_xp_gain > 0:
+		ad_mode = "double_xp"
+		ad_button.text = "WATCH AD: 2× XP"
+	else:
+		_hide_ad_button()   # revive used + nothing to double → no offer
 
-	# Interstitials disabled — rewarded (revive) ads only.
+	# Interstitials disabled — rewarded ads only.
+
+func _hide_ad_button() -> void:
+	ad_button.visible = false
+	retry_button.position.y -= 82.0
+	menu_button.position.y  -= 82.0
 
 # ── Stats card: LINES / BEST STREAK / BOARD CLEARS as columns ────────────────
 func _card_style() -> StyleBoxFlat:
@@ -458,6 +475,16 @@ func _build_leaderboard() -> void:
 func _on_watch_ad_pressed() -> void:
 	Sfx.play_click()
 	ad_button.disabled = true
+	if ad_mode == "double_xp":
+		Ads.show_rewarded(func(earned: bool):
+			if earned:
+				_grant_double_xp()
+			else:
+				# Closed early or no fill — no bonus
+				ad_button.disabled = false
+				ad_button.text = "AD NOT FINISHED — TRY AGAIN")
+		return
+	# Revive
 	Ads.show_rewarded(func(earned: bool):
 		if earned:
 			GameState.continue_mode = "ad"
@@ -466,6 +493,29 @@ func _on_watch_ad_pressed() -> void:
 			# Closed early or no fill — no revive
 			ad_button.disabled = false
 			ad_button.text = "AD NOT FINISHED — TRY AGAIN")
+
+func _grant_double_xp() -> void:
+	if _dx_claimed:
+		return
+	_dx_claimed = true
+	var before : int = GameState.player_xp
+	GameState.grant_double_xp()
+	# Re-animate the XP bar from its current fill up to the doubled total
+	xp_gain_label.text = "+" + str(GameState.last_xp_gain) + " XP"
+	xp_gain_label.pivot_offset = xp_gain_label.size * 0.5
+	var pop := create_tween()
+	pop.tween_property(xp_gain_label, "scale", Vector2(1.3, 1.3), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	pop.tween_property(xp_gain_label, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK)
+	var t := create_tween()
+	t.tween_method(_set_xp_display, float(before), float(GameState.player_xp), 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	Sfx.play_best()
+	# Retire the ad button so it can't be tapped again
+	ad_button.disabled = true
+	ad_button.text = "XP DOUBLED!"
+	var ft := create_tween()
+	ft.tween_interval(0.7)
+	ft.tween_property(ad_button, "modulate:a", 0.0, 0.3)
+	ft.tween_callback(func(): ad_button.visible = false)
 
 func _on_retry_pressed() -> void:
 	Sfx.play_click()

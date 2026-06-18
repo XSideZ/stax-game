@@ -1307,9 +1307,9 @@ func _advance_theme() -> void:
 	# AUTO cycles through every unlocked skin (shuffle bag) before any repeats
 	theme_idx = GameState.next_auto_theme(theme_idx)
 	GameState.set_theme(theme_idx)
-	# Skin pinned (dev override OR player lock): progression still ticks, but the
-	# visuals — block style, background, orbs, flash, theme popup — stay put.
-	if GameState.dev_skin_override >= 0 or GameState.skin_locked:
+	# Skin pinned (player lock): progression still ticks, but the visuals —
+	# block style, background, orbs, flash, theme popup — stay put.
+	if GameState.skin_locked:
 		return
 	prev_bg    = curr_bg
 	curr_bg    = THEMES[theme_idx]["bg"]
