@@ -508,7 +508,7 @@ func _build_profile() -> void:
 	profile_pin.draw.connect(func():
 		var t := _rank_tier(GameState.my_global_rank)
 		if t > 0:
-			_draw_pin(profile_pin, Vector2(15, 15), 12.0, t))
+			_draw_pin(profile_pin, Vector2(15, 18), 10.0, t))
 	card.add_child(profile_pin)
 
 	profile_name = Label.new()
@@ -1589,7 +1589,7 @@ func _make_rank_pin(tier: int) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(32, 32)   # fixed slot keeps the rank column aligned
 	if tier > 0:
-		c.draw.connect(func(): _draw_pin(c, Vector2(16, 20), 11.0, tier))
+		c.draw.connect(func(): _draw_pin(c, Vector2(16, 16), 9.0, tier))
 	return c
 
 func _draw_pin(canvas: Control, center: Vector2, r: float, tier: int) -> void:
