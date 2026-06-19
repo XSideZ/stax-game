@@ -657,6 +657,9 @@ func _build_name_prompt() -> void:
 	vbox.add_child(go)
 
 	var confirm := func():
+		if _launching:
+			return
+		_launching = true
 		var n := input.text.strip_edges()
 		GameState.set_player_name(n if not n.is_empty() else "PLAYER")
 		Sfx.play_click()
@@ -671,6 +674,7 @@ func _build_name_prompt() -> void:
 			get_tree().change_scene_to_file("res://scenes/Game.tscn")
 		else:
 			_build_menu()   # menu intro plays now, on a clean screen
+			_launching = false
 	go.pressed.connect(confirm)
 	input.text_submitted.connect(func(_t): confirm.call())
 	input.grab_focus()

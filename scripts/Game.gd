@@ -1051,7 +1051,7 @@ func _fire_power() -> void:
 		meter = 0.0
 		_power_gravity()
 	elif meter >= METER_LASER:
-		meter -= METER_LASER
+		meter = 0.0          # double bomb spends the whole meter
 		_power_twin_bomb()
 	elif meter >= METER_BOMB:
 		meter -= METER_BOMB
@@ -1074,6 +1074,25 @@ func _random_board_target() -> Vector2i:
 	if filled.is_empty():
 		return Vector2i(randi() % GRID_COLS, randi() % GRID_ROWS)
 	return filled[randi() % filled.size()]
+
+# A board cell at least `min_sep` cells (Chebyshev) away from `from`, preferring a
+# filled cell so the second twin bomb hits something AND stays visually separated.
+func _far_target(from: Vector2i, min_sep: int) -> Vector2i:
+	var far_filled : Array = []
+	var far_any    : Array = []
+	for r in GRID_ROWS:
+		for c in GRID_COLS:
+			if maxi(absi(c - from.x), absi(r - from.y)) < min_sep:
+				continue
+			var cc := Vector2i(c, r)
+			far_any.append(cc)
+			if grid.cells[r][c] != null:
+				far_filled.append(cc)
+	if not far_filled.is_empty():
+		return far_filled[randi() % far_filled.size()]
+	if not far_any.is_empty():
+		return far_any[randi() % far_any.size()]
+	return Vector2i((from.x + GRID_COLS / 2) % GRID_COLS, (from.y + GRID_ROWS / 2) % GRID_ROWS)
 
 func _power_bomb() -> void:
 	power_busy = true
@@ -1098,15 +1117,10 @@ func _power_bomb() -> void:
 
 func _power_twin_bomb() -> void:
 	power_busy = true
-	# Twice the first ability: TWO bombs at two DIFFERENT random spots.
+	# Twin bomb: two bombs in clearly DIFFERENT places — t2 is at least 3 cells from t1
+	# so the two 3x3 blasts never overlap (no "both bombs in the same spot").
 	var t1 := _random_board_target()
-	var t2 := _random_board_target()
-	var tries := 0
-	while t2 == t1 and tries < 30:
-		t2 = Vector2i(randi() % GRID_COLS, randi() % GRID_ROWS)
-		tries += 1
-	if t2 == t1:
-		t2 = Vector2i((t1.x + 1) % GRID_COLS, t1.y)   # guaranteed never the same spot
+	var t2 := _far_target(t1, 3)
 	var targets : Array = [t1, t2]
 
 	for tg : Vector2i in targets:
