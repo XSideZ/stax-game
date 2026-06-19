@@ -12,6 +12,16 @@ const COLORS: Array = [
 	Color(0.97, 0.88, 0.32),
 ]
 
+# Per-letter colours for the STAX logo, matched to the app-icon / title artwork
+# (S cyan, T pink, A green, X orange). Kept separate from COLORS so the orbs and
+# falling pieces are unaffected.
+const LOGO_COLORS: Array = [
+	Color("20ceef"),  # S
+	Color("ff3d7f"),  # T
+	Color("34d866"),  # A
+	Color("ff8c26"),  # X
+]
+
 const ORB_COUNT := 10
 const FALL_COUNT := 12
 
@@ -72,8 +82,19 @@ func _ready() -> void:
 
 	# First open: only the animated background + name prompt. The menu builds
 	# (and the logo intro plays) after the name is confirmed.
+	# A RETURNING player must reload straight into the menu and never be re-asked
+	# for a name — the "WHAT'S YOUR NAME?" box is only for a genuinely brand-new
+	# player. So if there's any saved progress, a finished tutorial, or a signed-in
+	# account, skip the prompt even when the name field somehow came back empty
+	# (a restore fills the real name in the background; _on_auth_signed_in refreshes).
 	if GameState.player_name.is_empty():
-		_build_name_prompt()
+		var is_returning := GameState.games_played > 0 or GameState.best_score > 0 \
+			or GameState.tutorial_done or Auth.is_signed_in()
+		if is_returning:
+			GameState.set_player_name("PLAYER")   # quiet fallback; real name returns on restore
+			_build_menu()
+		else:
+			_build_name_prompt()
 	else:
 		_build_menu()
 	Sfx.update_music()
@@ -177,9 +198,13 @@ func _build_logo() -> void:
 		var lbl := Label.new()
 		lbl.text = text[i]
 		lbl.add_theme_font_size_override("font_size", 96)
-		lbl.add_theme_color_override("font_color", COLORS[i % COLORS.size()])
+		lbl.add_theme_color_override("font_color", LOGO_COLORS[i % LOGO_COLORS.size()])
 		lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.09))
 		lbl.add_theme_constant_override("outline_size", 14)
+		# Chunky 3D drop, matched to the logo artwork (extruded dark base #17103a)
+		lbl.add_theme_color_override("font_shadow_color", Color("17103a"))
+		lbl.add_theme_constant_override("shadow_offset_x", 0)
+		lbl.add_theme_constant_override("shadow_offset_y", 10)
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.size = Vector2(lw, 120)
 		lbl.pivot_offset = Vector2(lw * 0.5, 60)
