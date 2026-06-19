@@ -11,7 +11,9 @@ extends RefCounted
 #         6 FROST   7 GRASS 8 WATER    9 LAVA  10 WOOD    11 GALAXY
 # Animated (need per-frame redraw): 8, 9, 11
 
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 28, 29, 30]
+# NOTE: honey(12), aurora(20), marble(22) and stained(26) were rebuilt as cheap STATIC
+# skins (no per-frame motion) to kill their framerate drops — so they're NOT animated.
+const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 14, 15, 16, 17, 18, 19, 21, 23, 24, 25, 28, 29, 30]
 
 # Rarity per skin (0 COMMON · 1 RARE · 2 EPIC · 3 LEGENDARY), mirrors the Biomes
 # gallery tiers.
@@ -719,54 +721,29 @@ static func _wood(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, se
 	rr_outline(ci, r, rad, w.darkened(0.45), 1.5)
 
 # ── 12 HONEY (animated: continuous honeycomb + oozing drip) ──────────────────
-static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
-	# Every piece colour maps to a SHADE OF AMBER (light wildflower to dark
-	# buckwheat) — pieces stay tellable apart, nothing reads green/blue
+static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, _pr: Rect2 = Rect2()) -> void:
+	# Self-contained amber cell. Cheap: gradient + a few hexes drawn fully in-bounds,
+	# NO per-cell honeycomb lattice or polygon clipping (was the framerate killer).
 	var tone := fmod(col.h * 2.7 + col.v * 0.5, 1.0)
 	var hn := Color(1.00, 0.76, 0.28).lerp(Color(0.78, 0.48, 0.10), tone)
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	# Light base = the wax walls; the darker hex cells get drawn on top
-	rr_grad(ci, r, rad, hn.lightened(0.35), hn.lightened(0.05))
-	# Honeycomb tiled in ABSOLUTE canvas space — one continuous comb across
-	# all neighbouring blocks, each cell clipped to its block
-	var hs := ps * 0.27
-	var hw := sqrt(3.0) * hs
-	var vstep := 1.5 * hs
-	var inner := r.grow(-s * 0.045)
-	# Pattern-space translation: lattice is computed in pr-space and shifted by
-	# delta — lets the dragged piece sample BOARD-space comb so the hover
-	# preview matches the placed result exactly. Small deltas (squash wobble)
-	# are zeroed so the pattern stays put during landing animations.
-	var delta := r.position - pr.position
-	if delta.length() < s * 0.5:
-		delta = Vector2.ZERO
-	var row0 := int(floor((pr.position.y - hs) / vstep))
-	var row1 := int(ceil((pr.end.y + hs) / vstep))
-	for row in range(row0, row1 + 1):
-		var cy := float(row) * vstep
-		var xoff := hw * 0.5 if posmod(row, 2) == 1 else 0.0
-		var q0 := int(floor((pr.position.x - hw) / hw))
-		var q1 := int(ceil((pr.end.x + hw) / hw))
-		for q in range(q0, q1 + 1):
-			var cx := float(q) * hw + xoff
-			var hc := Vector2(cx, cy) + delta
-			var hh := absi((q * 73856093) ^ (row * 19349663))
-			var hex := PackedVector2Array()
-			var fully_inside := true
-			for i in 6:
-				var a := PI / 6.0 + float(i) * PI / 3.0
-				var pt := hc + Vector2(cos(a), sin(a)) * hs * 0.90
-				hex.append(pt)
-				if not inner.has_point(pt):
-					fully_inside = false
-			var cell := clip_poly_to_rect(hex, inner)
-			draw_poly_safe(ci, cell, hn.darkened(0.22 + float(hh % 5) * 0.05), true)
-			# Wax-capped cells (only when the whole hex fits inside the block)
-			if fully_inside and hh % 3 == 0:
-				ci.draw_circle(hc, hs * 0.58, hn.lightened(0.22))
-				ci.draw_circle(hc - Vector2(hs * 0.18, hs * 0.18), hs * 0.16, hn.lightened(0.45))
-	# Glossy shine band
+	rr_grad(ci, r, rad, hn.lightened(0.35), hn.lightened(0.02))
+	# A small honeycomb cluster (centre + 4), each hex sits inside the block so it
+	# never needs clipping. The lighter wax base shows between them as the walls.
+	var c := r.get_center()
+	var hr := s * 0.165
+	var off := s * 0.19
+	var centers := [c, c + Vector2(-off, -off), c + Vector2(off, -off),
+		c + Vector2(-off, off), c + Vector2(off, off)]
+	for k in centers.size():
+		var hc : Vector2 = centers[k]
+		var hex := PackedVector2Array()
+		for i in 6:
+			var a := PI / 6.0 + float(i) * PI / 3.0
+			hex.append(hc + Vector2(cos(a), sin(a)) * hr)
+		draw_poly_safe(ci, hex, hn.darkened(0.20 + float(k % 3) * 0.06), true)
+		ci.draw_circle(hc - Vector2(hr * 0.2, hr * 0.2), hr * 0.16, hn.lightened(0.45))
+	# Glossy shine band + rim
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.10, s * 0.06), Vector2(r.size.x - s * 0.20, s * 0.09)),
 		s * 0.045, Color(1, 1, 0.85, 0.30))
 	rr_outline(ci, r, rad, hn.darkened(0.35), 1.5)
@@ -776,18 +753,7 @@ static func paint_overlay(ci: CanvasItem, style: int, r: Rect2, col: Color, seed
 	var s := r.size.x
 	var t := Time.get_ticks_msec() * 0.001
 	match style:
-		12:  # Honey drip: oozes down slowly, then retracts back up — no popping
-			var tone := fmod(col.h * 2.7 + col.v * 0.5, 1.0)
-			var hn := Color(1.00, 0.76, 0.28).lerp(Color(0.78, 0.48, 0.10), tone)
-			var dk := fmod(t * 0.30 + float(seed_v % 9) * 0.13, 1.0)
-			var dx := r.position.x + r.size.x * (0.30 + 0.40 * float(seed_v % 3) / 2.0)
-			var k := (dk / 0.7) if dk < 0.7 else (1.0 - (dk - 0.7) / 0.3)
-			if k > 0.02:
-				var stretch := s * 0.16 * k
-				var bulb := s * 0.05 * (0.55 + 0.45 * k)
-				ci.draw_circle(Vector2(dx, r.end.y - s * 0.02), s * 0.045 * (0.55 + 0.45 * k), hn.lightened(0.15))
-				ci.draw_line(Vector2(dx, r.end.y - s * 0.02), Vector2(dx, r.end.y + stretch), hn.lightened(0.15), s * 0.06 * (0.55 + 0.45 * k))
-				ci.draw_circle(Vector2(dx, r.end.y + stretch), bulb, hn.lightened(0.20))
+		# (Honey's animated drip was removed — honey is now a cheap static skin.)
 		18:  # Slime drip: same ooze-then-retract envelope
 			var gl := col.lerp(Color(0.40, 0.90, 0.25), 0.55)
 			var dk2 := fmod(t * 0.26 + float(seed_v % 6) * 0.15, 1.0)
@@ -1174,54 +1140,24 @@ static func _galaxy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 # living in pr (pattern) space — each band's centreline ripples on two sine
 # harmonics of the ABSOLUTE x, so the curtains wave all over and flow unbroken
 # from block to block. Each band is drawn as clipped halo→core ribbons.
-static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
-	var t := Time.get_ticks_msec() * 0.001
+static func _aurora(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, _pr: Rect2 = Rect2()) -> void:
+	# Self-contained night-sky cell. Cheap: gradient + two soft aurora bands (rounded
+	# rects, in-bounds) + a few stars. NO continuous clipped curtain ribbons.
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
 	rr_grad(ci, r, rad, Color(0.04, 0.06, 0.18), Color(0.02, 0.10, 0.16))
-	# Twinkling stars (per block — just points, no need to be continuous)
+	# Two aurora bands, hues derived from the piece colour so pieces stay tellable
+	var hue := fmod(0.32 + col.h * 0.35, 1.0)
+	for bi in 2:
+		var bc := Color.from_hsv(fmod(hue + float(bi) * 0.16, 1.0), 0.60, 1.0)
+		var by : float = r.position.y + r.size.y * (0.30 + float(bi) * 0.28)
+		rr_fill(ci, Rect2(r.position.x + s * 0.06, by, r.size.x - s * 0.12, s * 0.15),
+			s * 0.06, Color(bc.r, bc.g, bc.b, 0.26 - float(bi) * 0.07))
+	# Stars (static dots, stable from the cell seed)
 	for i in 4:
 		var hsh := seed_v * 41 + i * 97
 		var stx : float = r.position.x + s * (0.12 + float(hsh % 76) / 100.0)
-		var sty : float = r.position.y + s * (0.08 + float((hsh / 7) % 46) / 100.0)
-		var tw : float = 0.4 + 0.6 * absf(sin(t * 2.0 + float(hsh)))
-		ci.draw_circle(Vector2(stx, sty), s * 0.013, Color(1, 1, 1, 0.5 * tw))
-	# Continuous aurora curtains
-	var delta := r.position - pr.position
-	if delta.length() < s * 0.5:
-		delta = Vector2.ZERO
-	var band_spacing := ps * 1.4
-	var nx := 6
-	var passes := [[0.55, 0.10, 0.0], [0.30, 0.15, 0.0], [0.10, 0.34, 0.35]]   # [thick, alpha, lighten]
-	var b0 := int(floor((pr.position.y - band_spacing * 1.5) / band_spacing))
-	var b1 := int(ceil((pr.end.y + band_spacing * 1.5) / band_spacing))
-	for band in range(b0, b1 + 1):
-		var by : float = float(band) * band_spacing
-		var bphase : float = float(absi(band * 2654435) % 1000) / 1000.0 * TAU
-		var hue : float = fmod(0.30 + col.h * 0.35 + float(band) * 0.13 + 0.05 * sin(t * 0.3 + bphase), 1.0)
-		var ac := Color.from_hsv(hue, 0.62, 1.0)
-		# Centreline y for a given absolute x — two harmonics so it ripples all over
-		var cx0 := pr.position.x
-		var cx1 := pr.end.x
-		var ys := PackedFloat32Array()
-		var xs := PackedFloat32Array()
-		for k in nx + 1:
-			var px : float = lerpf(cx0, cx1, float(k) / float(nx))
-			xs.append(px)
-			ys.append(by + sin(px * (2.4 / ps) + t * 0.5 + bphase) * ps * 0.45
-				+ sin(px * (5.1 / ps) - t * 0.35 + bphase * 1.7) * ps * 0.20)
-		for p : Array in passes:
-			var thick : float = ps * float(p[0]) * (0.8 + 0.4 * sin(bphase))
-			var pc := ac.lerp(Color(1, 1, 1, 1), float(p[2]))
-			var top := PackedVector2Array()
-			var bot := PackedVector2Array()
-			for k in nx + 1:
-				top.append(Vector2(xs[k], ys[k] - thick * 0.5) + delta)
-				bot.append(Vector2(xs[k], ys[k] + thick * 0.5) + delta)
-			var poly := top.duplicate()
-			for k in range(bot.size() - 1, -1, -1):
-				poly.append(bot[k])
-			draw_poly_safe(ci, clip_poly_to_rect(poly, r), Color(pc.r, pc.g, pc.b, float(p[1])))
+		var sty : float = r.position.y + s * (0.08 + float((hsh / 7) % 40) / 100.0)
+		ci.draw_circle(Vector2(stx, sty), s * 0.013, Color(1, 1, 1, 0.5))
 	rr_outline(ci, r, rad, Color(0.30, 0.50, 0.60, 0.5), 1.5)
 
 # ── 21 PLASMA (animated: electric energy ball) ───────────────────────────────
@@ -1270,61 +1206,32 @@ static func _plasma(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, 
 # veins live in pr (pattern) space as value-noise lanes, so each block draws the
 # slice crossing it and the cracks run unbroken across neighbouring blocks.
 # Same canvas-continuous trick as honey/sakura/metals; static.
-static func _marble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
+static func _marble(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int, _pr: Rect2 = Rect2()) -> void:
+	# Self-contained veined stone. Cheap: gradient + a couple of jagged vein polylines
+	# (in-bounds) + flecks + sheen. NO per-cell clipped vein ribbons across the board.
 	var base := col.lerp(Color(0.95, 0.95, 0.93), 0.78)
 	var vein := col.lerp(Color(0.32, 0.30, 0.38), 0.62)
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.25))
 	rr_grad(ci, r, rad, base.lightened(0.12), base.darkened(0.08))
-	# Pattern-space translation (zeroed for tiny squash wobble), so the vein field
-	# stays put while a cell animates and matches across blocks + drag preview.
-	var delta := r.position - pr.position
-	if delta.length() < s * 0.5:
-		delta = Vector2.ZERO
-	var spacing := ps * 0.62      # horizontal gap between vein lanes
-	var seg := ps * 0.30          # vertical spacing of value-noise nodes
-	var scan := spacing * 1.6
-	var lane0 := int(floor((pr.position.x - scan) / spacing))
-	var lane1 := int(ceil((pr.end.x + scan) / spacing))
-	var j0 := int(floor((pr.position.y - seg) / seg)) - 1
-	var j1 := int(ceil((pr.end.y + seg) / seg)) + 1
-	# Each vein flows on a low-frequency diagonal SWEEP (so it crosses the board
-	# instead of sitting in a vertical lane) plus fine value-noise jitter, and its
-	# WIDTH tapers along the run. Drawn as 3 ribbons — wide soft halo, mid, thin
-	# dark core — each clipped to the block so neighbours fill matching slices and
-	# the cracks stay unbroken across the whole board.
-	var passes := [[0.13, 0.07], [0.075, 0.14], [0.03, 0.44]]
-	for p : Array in passes:
-		var pw : float = s * float(p[0])
-		var vc := Color(vein.r, vein.g, vein.b, float(p[1]))
-		for lane in range(lane0, lane1 + 1):
-			var lane_base : float = float(lane) * spacing
-			var lphase : float = float(absi(lane * 2654435) % 1000) / 1000.0 * TAU
-			var left := PackedVector2Array()
-			var right := PackedVector2Array()
-			for j in range(j0, j1 + 1):
-				var y : float = float(j) * seg
-				var hsh := absi((lane * 73856093) ^ (j * 19349663))
-				var jit : float = (float(hsh % 1000) / 1000.0 - 0.5) * spacing * 0.5
-				var sweep : float = sin(y / (ps * 3.2) * PI + lphase) * spacing * 0.6
-				var x : float = lane_base + sweep + jit
-				var wv : float = pw * (0.55 + 0.9 * float((hsh / 7) % 100) / 100.0)
-				left.append(Vector2(x - wv * 0.5, y) + delta)
-				right.append(Vector2(x + wv * 0.5, y) + delta)
-			var poly := left.duplicate()
-			for k in range(right.size() - 1, -1, -1):
-				poly.append(right[k])
-			draw_poly_safe(ci, clip_poly_to_rect(poly, r), vc)
-	# Mineral flecks for a stony read (per block, stable from the cell seed)
+	# Two jagged veins as polylines that wander but stay inside the block
+	var h := seed_v
+	for _v in 2:
+		h = (h * 1103515 + 12345) % 2147483647
+		var x : float = r.position.x + s * (0.12 + 0.26 * float(h % 100) / 100.0)
+		var pts := PackedVector2Array()
+		for k in 4:
+			var y : float = r.position.y + s * (0.08 + 0.26 * float(k))
+			h = (h * 1103515 + 12345) % 2147483647
+			x += s * (float(h % 100) / 100.0 - 0.5) * 0.45
+			x = clampf(x, r.position.x + s * 0.10, r.end.x - s * 0.10)
+			pts.append(Vector2(x, y))
+		ci.draw_polyline(pts, Color(vein.r, vein.g, vein.b, 0.28), s * 0.03)
+		ci.draw_polyline(pts, Color(vein.r, vein.g, vein.b, 0.50), s * 0.012)
+	# Mineral flecks + glossy corner highlight (per block — it's lighting)
 	for i in 4:
 		var fx : float = r.position.x + s * (0.12 + float((seed_v * 13 + i * 29) % 76) / 100.0)
 		var fyy : float = r.position.y + s * (0.12 + float((seed_v * 7 + i * 53) % 76) / 100.0)
 		ci.draw_circle(Vector2(fx, fyy), s * 0.010, Color(vein.r, vein.g, vein.b, 0.16))
-	# Soft diagonal sheen + a glossy corner highlight (per block — it's lighting)
-	var sheen := clip_poly_to_rect(PackedVector2Array([
-		r.position + Vector2(s * 0.10, 0), r.position + Vector2(s * 0.34, 0),
-		r.position + Vector2(-s * 0.06, r.size.y), r.position + Vector2(-s * 0.30, r.size.y)]), r)
-	draw_poly_safe(ci, sheen, Color(1, 1, 1, 0.12))
 	ci.draw_circle(r.position + r.size * Vector2(0.28, 0.26), s * 0.05, Color(1, 1, 1, 0.20))
 	rr_outline(ci, r, rad, base.darkened(0.22), 1.5)
 
@@ -1428,58 +1335,23 @@ static func _prism(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _
 # Jewel diamonds tiled in pr (pattern) space with dark lead came between them, so
 # neighbouring blocks form a single cathedral window. A band of sunlight drifts
 # diagonally across, brightening the glass it passes. Each diamond a varied hue.
-static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
-	var ps := pr.size.x if pr.size.x > 0.0 else s
-	var t := Time.get_ticks_msec() * 0.001
+static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, _pr: Rect2 = Rect2()) -> void:
+	# Self-contained leaded-glass pane. Cheap: one big diamond drawn in-bounds over a
+	# dark lead came, NO tiled diamond lattice or per-diamond clipping.
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came shows in the gaps
-	var inner := r.grow(-s * 0.04)
-	var delta := r.position - pr.position
-	if delta.length() < s * 0.5:
-		delta = Vector2.ZERO
-	# Diamonds sit on grid points where (i+j) is even — that set tiles the plane.
-	var g := ps * 0.38           # diamond half-diagonal
-	var gg := g - ps * 0.045     # inset for the lead gap
-	var i0 := int(floor(pr.position.x / g)) - 1
-	var i1 := int(ceil(pr.end.x / g)) + 1
-	var j0 := int(floor(pr.position.y / g)) - 1
-	var j1 := int(ceil(pr.end.y / g)) + 1
-	for i in range(i0, i1 + 1):
-		for j in range(j0, j1 + 1):
-			if (i + j) % 2 != 0:
-				continue
-			var cx : float = float(i) * g + delta.x
-			var cy : float = float(j) * g + delta.y
-			var dia := PackedVector2Array([
-				Vector2(cx, cy - gg), Vector2(cx + gg, cy),
-				Vector2(cx, cy + gg), Vector2(cx - gg, cy)])
-			var clipped := clip_poly_to_rect(dia, inner)
-			if clipped.size() < 3:
-				continue
-			var hsh := absi((i * 73856093) ^ (j * 19349663))
-			var jhue : float = fmod(col.h + float(hsh % 1000) / 1000.0, 1.0)
-			var wave : float = 0.5 + 0.5 * sin((cx + cy) / (ps * 2.6) - t * 0.7)
-			# Backlit glass: bright light behind, then the colour as a TRANSLUCENT
-			# layer over it. Where the light sweeps, the glass goes more transparent
-			# (paler/brighter) — like sun shining through from the far side.
-			draw_poly_safe(ci, clipped, Color(1.0, 0.98, 0.92), true)
-			var jewel := Color.from_hsv(jhue, 0.90, 1.0)
-			var ja : float = 0.50 + 0.24 * (1.0 - wave)
-			draw_poly_safe(ci, clipped, Color(jewel.r, jewel.g, jewel.b, ja), true)
-			# Glint where the light passes through the thin centre of the pane —
-			# only when the diamond's centre is inside this block (no stray orbs)
-			if inner.has_point(Vector2(cx, cy)):
-				ci.draw_circle(Vector2(cx, cy), gg * 0.22, Color(1, 1, 1, 0.10 + 0.22 * wave))
-			# Glass bevel — only on diamonds fully inside the block so the came
-			# lines never spill into the gaps between blocks
-			var v_top := Vector2(cx, cy - gg)
-			var v_left := Vector2(cx - gg, cy)
-			var v_right := Vector2(cx + gg, cy)
-			var v_bot := Vector2(cx, cy + gg)
-			if inner.has_point(v_top) and inner.has_point(v_left):
-				ci.draw_line(v_top, v_left, jewel.lightened(0.45), 1.0)
-			if inner.has_point(v_right) and inner.has_point(v_bot):
-				ci.draw_line(v_right, v_bot, jewel.darkened(0.25), 1.0)
+	rr_fill(ci, r, rad, Color(0.05, 0.04, 0.07))   # dark lead came background
+	var c := r.get_center()
+	var g := s * 0.40
+	var dia := PackedVector2Array([
+		Vector2(c.x, c.y - g), Vector2(c.x + g, c.y),
+		Vector2(c.x, c.y + g), Vector2(c.x - g, c.y)])
+	var jewel := Color.from_hsv(fmod(col.h + 0.05, 1.0), 0.85, 1.0)
+	draw_poly_safe(ci, dia, Color(1.0, 0.98, 0.92), true)                  # backlight
+	draw_poly_safe(ci, dia, Color(jewel.r, jewel.g, jewel.b, 0.62), true)  # coloured glass
+	# Bevel highlights on two edges + a centre glint
+	ci.draw_line(Vector2(c.x, c.y - g), Vector2(c.x - g, c.y), jewel.lightened(0.45), 1.0)
+	ci.draw_line(Vector2(c.x + g, c.y), Vector2(c.x, c.y + g), jewel.darkened(0.25), 1.0)
+	ci.draw_circle(c, g * 0.18, Color(1, 1, 1, 0.16))
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
 # ── 27 SYNTHWAVE (animated: a self-contained 80s neon CRT tile) ──────────────
