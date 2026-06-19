@@ -1490,7 +1490,7 @@ func _set_lb_tab(tab: String) -> void:
 		return
 	lb_status.text = "Loading…"
 	if tab == "global":
-		Net.fetch_global(50)
+		Net.fetch_global(1000)   # show the full top 1000 (scrollable); server cap must allow it
 	else:
 		Net.fetch_friends(GameState.player_id)
 
