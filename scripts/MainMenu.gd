@@ -41,7 +41,7 @@ const STAR_R     := 23.0
 const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 	"CANDY", "FROST", "GRASS", "WATER", "LAVA", "WOOD", "GALAXY",
 	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO",
-	"AURORA", "PLASMA", "MARBLE", "MATRIX", "HOLOGRAM",
+	"AURORA", "PLASMA", "OPAL", "MATRIX", "HOLOGRAM",
 	"PRISM", "STAINED", "SYNTHWAVE", "AUTUMN", "WARP"]
 
 var orbs    : Array = []

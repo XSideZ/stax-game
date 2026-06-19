@@ -1939,15 +1939,15 @@ func _draw_bg_pattern() -> void:
 				var pls : float = 0.5 + 0.5 * sin(pt * 2.0 + float(i))
 				draw_circle(Vector2(ox, oy), 30.0 + pls * 12.0, Color(0.7, 0.4, 1.0, 0.05))
 				draw_circle(Vector2(ox, oy), 11.0, Color(0.85, 0.6, 1.0, 0.07))
-		22:  # Marble Hall — large soft drifting veins
-			for i in 4:
-				var vx : float = 60.0 + float(i) * 110.0
-				var pts := PackedVector2Array()
-				for k in 9:
-					var y : float = float(k) / 8.0 * 896.0
-					pts.append(Vector2(vx + sin(float(k) * 0.7 + float(i) * 2.0) * 42.0, y))
-				draw_polyline(pts, Color(0.40, 0.38, 0.46, 0.05), 9.0)
-				draw_polyline(pts, Color(1, 1, 1, 0.05), 3.0)
+		22:  # Opal — soft iridescent colour clouds drifting
+			var dt22 := Time.get_ticks_msec() * 0.001
+			for i in 6:
+				var ox : float = 70.0 + float(i) * 60.0
+				var oy : float = 170.0 + float(i) * 110.0 + sin(dt22 * 0.4 + float(i) * 1.4) * 45.0
+				var oh : float = fmod(float(i) * 0.17 + dt22 * 0.04, 1.0)
+				var oc := Color.from_hsv(oh, 0.45, 1.0)
+				draw_circle(Vector2(ox, oy), 70.0, Color(oc.r, oc.g, oc.b, 0.045))
+				draw_circle(Vector2(ox, oy), 24.0, Color(oc.r, oc.g, oc.b, 0.05))
 		23:  # Data Stream — falling green code columns
 			var dt3 := Time.get_ticks_msec() * 0.001
 			for c in 12:
