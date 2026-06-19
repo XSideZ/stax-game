@@ -426,7 +426,7 @@ func _spawn_pieces() -> void:
 	# ~10k upward the board stops being constantly emptied for you.
 	var forced_clear : Array = []
 	var gift_chance : float = 1.0 if sets_given < EARLY_CLEAR_SETS \
-		else lerpf(0.40, 0.0, _difficulty())
+		else lerpf(0.15, 0.0, _difficulty())
 	if randf() < gift_chance:
 		forced_clear = _pick_board_clear_shape()
 
@@ -465,16 +465,16 @@ func _spawn_pieces() -> void:
 		_try_game_over()
 
 func _progression() -> float:
-	return clampf((sets_given - 2) / 5.0, 0.0, 1.0)
+	return clampf((sets_given - 1) / 3.0, 0.0, 1.0)
 
 # Run difficulty 0..1. Stays 0 through the (already well-tuned) early game, then
 # ramps up so the generosity crutches fade and it gets genuinely hard. Driven by the
 # MAX of two ramps — sets played AND score — so a fast high-scoring run gets hard on
 # schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
-const DIFF_START := 6.0        # sets before the sets-ramp starts climbing (= early phase)
-const DIFF_LEN   := 24.0       # sets over which the sets-ramp climbs to max (~2x faster)
-const DIFF_SCORE_START := 3000.0   # score where the score-ramp begins (bites earlier)
-const DIFF_SCORE_LEN   := 26000.0  # score span to max (~29k → fully hard, was ~58k)
+const DIFF_START := 2.0        # sets before the sets-ramp starts climbing (= early phase)
+const DIFF_LEN   := 14.0       # sets over which the sets-ramp climbs to max (bites fast)
+const DIFF_SCORE_START := 1000.0   # score where the score-ramp begins (bites very early)
+const DIFF_SCORE_LEN   := 9000.0   # score span to max (~10k → fully hard)
 func _difficulty() -> float:
 	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
 	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
@@ -482,10 +482,43 @@ func _difficulty() -> float:
 
 # Deep-run pressure that keeps climbing AFTER _difficulty() has maxed (score 80k→300k),
 # so a long high-score run keeps tightening instead of plateauing at "max" difficulty.
-const DEEP_START := 40000.0
-const DEEP_LEN   := 110000.0
+const DEEP_START := 20000.0
+const DEEP_LEN   := 130000.0
 func _deep() -> float:
 	return clampf((float(score) - DEEP_START) / DEEP_LEN, 0.0, 1.0)
+
+# How often the spawner deliberately hands a crowding, hard-to-place piece instead of
+# a helpful one. Climbs with both ramps so a long high-score run keeps getting meaner;
+# capped below 1.0 so there's always a sliver of breathing room (and the rescue power).
+func _hard_bias() -> float:
+	return clampf(lerpf(0.0, 0.62, _difficulty()) + lerpf(0.0, 0.26, _deep()), 0.0, 0.82)
+
+# The meanest fitting piece: the more cells it has and the FEWER places it fits, the
+# more it crowds the board and strands gaps. Small random jitter keeps it from handing
+# the exact same shape every time. Returns [] only if nothing fits at all.
+func _pick_adversarial_shape() -> Array:
+	var any_fit  : Array = []
+	var best     : Array = []
+	var best_rank : float = INF
+	for s in SHAPES:
+		var fit_count := 0
+		for r in GRID_ROWS:
+			for c in GRID_COLS:
+				if grid.can_place(s, r, c):
+					fit_count += 1
+		if fit_count == 0:
+			continue
+		any_fit.append(s)
+		# Lower rank = meaner: few placements, many cells. Jitter breaks ties softly.
+		var rank := float(fit_count) - float(s.size()) * 2.5 + randf() * 1.5
+		if rank < best_rank:
+			best_rank = rank
+			best = s
+	if not best.is_empty():
+		return best
+	if not any_fit.is_empty():
+		return any_fit[randi() % any_fit.size()]
+	return []
 
 # Drain toward a board clear: early in the run, or when it's been too long since
 # the last one. The drought threshold GROWS with difficulty so board-clear bailouts
@@ -495,7 +528,7 @@ func _wants_clear() -> bool:
 	# difficulty, then keeps growing into the deep game so the board stays full and
 	# the pressure is real at high scores.
 	var drought : int = int(round(
-		lerpf(float(CLEAR_DROUGHT), 36.0, _difficulty()) + lerpf(0.0, 16.0, _deep())))
+		lerpf(float(CLEAR_DROUGHT), 70.0, _difficulty()) + lerpf(0.0, 40.0, _deep())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
@@ -523,12 +556,12 @@ func _fill_pool() -> Array:
 # to 0% by move ~45. Smart picks complete lines (multi-line wins outright);
 # when nothing clears yet, hand out big "builder" pieces so the board fills
 # fast and double/triple clears set themselves up.
-const SMART_FADE_MOVES := 24.0
+const SMART_FADE_MOVES := 10.0
 
 # Early game = a fast "clear the whole board" puzzle. For the first few sets we
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
-const EARLY_CLEAR_SETS   := 5
+const EARLY_CLEAR_SETS   := 2
 const EARLY_CLEAR_CHANCE := 1.0
 # After this many sets with no full board clear, briefly favour small clearing
 # pieces again (a "drain") to set up another board clear — keeps board clears
@@ -578,7 +611,7 @@ func _pick_shape() -> Array:
 		if not fill.is_empty():
 			return fill
 		return _pick_helpful_shape()
-	var smart_p : float = clampf(0.72 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.72)
+	var smart_p : float = clampf(0.35 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.35)
 	if randf() < smart_p:
 		var smart := _pick_combo_shape()
 		if not smart.is_empty():
@@ -600,6 +633,13 @@ func _pick_shape() -> Array:
 			if not fitting.is_empty():
 				return fitting[randi() % fitting.size()]
 		return _pick_helpful_shape()
+	# Adversarial pressure: the deeper the run, the more often we deliberately hand a
+	# crowding, hard-to-place piece instead of a helpful one. This is the main reason
+	# high scores stay hard now instead of plateauing into a comfortable groove.
+	if randf() < _hard_bias():
+		var mean := _pick_adversarial_shape()
+		if not mean.is_empty():
+			return mean
 	if randf() < _progression():
 		return SHAPES[randi() % SHAPES.size()]
 	return _pick_helpful_shape()
