@@ -61,12 +61,15 @@ begin
 end; $$;
 
 -- Top N globally. Returns NO ids/codes, so clients can't grief other players.
+-- Excludes best_score = 0 so freshly-created / test rows never show on the board
+-- (a real player appears the instant they clear their first line).
 create or replace function public.get_global_board(p_limit int default 50)
 returns table(rank int, name text, best_score int, level int)
 language sql security definer set search_path = public as $$
   select (row_number() over (order by best_score desc, updated_at asc))::int,
          name, best_score, level
   from players
+  where best_score > 0
   order by best_score desc, updated_at asc
   limit greatest(1, least(p_limit, 1000));
 $$;
