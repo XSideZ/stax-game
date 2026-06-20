@@ -429,7 +429,7 @@ func _spawn_pieces() -> void:
 	# ~10k upward the board stops being constantly emptied for you.
 	var forced_clear : Array = []
 	var gift_chance : float = 1.0 if sets_given < EARLY_CLEAR_SETS \
-		else lerpf(0.20, 0.0, _difficulty())
+		else lerpf(0.26, 0.0, _difficulty())
 	if randf() < gift_chance:
 		forced_clear = _pick_board_clear_shape()
 
@@ -475,9 +475,9 @@ func _progression() -> float:
 # MAX of two ramps — sets played AND score — so a fast high-scoring run gets hard on
 # schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
 const DIFF_START := 2.0        # sets before the sets-ramp starts climbing (= early phase)
-const DIFF_LEN   := 14.0       # sets over which the sets-ramp climbs to max (bites fast)
+const DIFF_LEN   := 16.0       # sets over which the sets-ramp climbs to max (eased: was 14)
 const DIFF_SCORE_START := 1000.0   # score where the score-ramp begins (bites very early)
-const DIFF_SCORE_LEN   := 11000.0  # score span to max (~12k → fully hard)
+const DIFF_SCORE_LEN   := 13000.0  # score span to max (~14k → fully hard; eased from ~12k)
 func _difficulty() -> float:
 	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
 	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
@@ -494,7 +494,7 @@ func _deep() -> float:
 # a helpful one. Climbs with both ramps so a long high-score run keeps getting meaner;
 # capped below 1.0 so there's always a sliver of breathing room (and the rescue power).
 func _hard_bias() -> float:
-	return clampf(lerpf(0.0, 0.54, _difficulty()) + lerpf(0.0, 0.22, _deep()), 0.0, 0.72)
+	return clampf(lerpf(0.0, 0.47, _difficulty()) + lerpf(0.0, 0.18, _deep()), 0.0, 0.65)
 
 # The meanest fitting piece: the more cells it has and the FEWER places it fits, the
 # more it crowds the board and strands gaps. Small random jitter keeps it from handing
@@ -531,7 +531,7 @@ func _wants_clear() -> bool:
 	# difficulty, then keeps growing into the deep game so the board stays full and
 	# the pressure is real at high scores.
 	var drought : int = int(round(
-		lerpf(float(CLEAR_DROUGHT), 60.0, _difficulty()) + lerpf(0.0, 32.0, _deep())))
+		lerpf(float(CLEAR_DROUGHT), 52.0, _difficulty()) + lerpf(0.0, 26.0, _deep())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
