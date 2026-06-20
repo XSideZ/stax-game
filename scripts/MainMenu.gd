@@ -61,6 +61,10 @@ var _confirm_open := false       # a "new game?" dialog is open → don't stack 
 @onready var ui : CanvasLayer = $UI
 
 func _ready() -> void:
+	# The menu is decorative animation only — cap it to 30fps to save battery/heat
+	# (the 120Hz phone was compositing the full animated bg at 60fps while idle here).
+	# Game._ready restores the 60fps cap for responsive drag during play.
+	Engine.max_fps = 30
 	for _i in ORB_COUNT:
 		orbs.append({
 			"pos":    Vector2(randf() * 414.0, randf() * 896.0),

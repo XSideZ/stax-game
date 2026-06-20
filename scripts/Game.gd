@@ -238,6 +238,9 @@ var score_glow : float = 0.0   # 0..1 rainbow intensity, ramps with score (half@
 var drag_layer : Node2D
 
 func _ready() -> void:
+	# Restore the full 60fps cap for responsive drag during play — the menu and
+	# game-over screens drop to 30fps to save battery, so re-assert 60 here.
+	Engine.max_fps = 60
 	# Keep whatever skin was last in play: a continued run restores its theme,
 	# and a fresh run inherits the skin from the run that just ended (no jarring
 	# re-randomize on death). It still rotates during play on line milestones.
