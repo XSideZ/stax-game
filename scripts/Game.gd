@@ -429,7 +429,7 @@ func _spawn_pieces() -> void:
 	# ~10k upward the board stops being constantly emptied for you.
 	var forced_clear : Array = []
 	var gift_chance : float = 1.0 if sets_given < EARLY_CLEAR_SETS \
-		else lerpf(0.26, 0.0, _difficulty())
+		else lerpf(0.34, 0.06, _difficulty())
 	if randf() < gift_chance:
 		forced_clear = _pick_board_clear_shape()
 
@@ -474,10 +474,10 @@ func _progression() -> float:
 # ramps up so the generosity crutches fade and it gets genuinely hard. Driven by the
 # MAX of two ramps — sets played AND score — so a fast high-scoring run gets hard on
 # schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
-const DIFF_START := 2.0        # sets before the sets-ramp starts climbing (= early phase)
-const DIFF_LEN   := 16.0       # sets over which the sets-ramp climbs to max (eased: was 14)
-const DIFF_SCORE_START := 1000.0   # score where the score-ramp begins (bites very early)
-const DIFF_SCORE_LEN   := 13000.0  # score span to max (~14k → fully hard; eased from ~12k)
+const DIFF_START := 3.0        # sets before the sets-ramp starts climbing (= early phase)
+const DIFF_LEN   := 22.0       # sets over which the sets-ramp climbs to max (eased: 16→22)
+const DIFF_SCORE_START := 2000.0   # score where the score-ramp begins (later: was 1000)
+const DIFF_SCORE_LEN   := 20000.0  # score span to max (~22k → fully hard; eased from ~14k)
 func _difficulty() -> float:
 	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
 	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
@@ -485,8 +485,8 @@ func _difficulty() -> float:
 
 # Deep-run pressure that keeps climbing AFTER _difficulty() has maxed (score 80k→300k),
 # so a long high-score run keeps tightening instead of plateauing at "max" difficulty.
-const DEEP_START := 20000.0
-const DEEP_LEN   := 130000.0
+const DEEP_START := 35000.0
+const DEEP_LEN   := 160000.0
 func _deep() -> float:
 	return clampf((float(score) - DEEP_START) / DEEP_LEN, 0.0, 1.0)
 
@@ -494,7 +494,7 @@ func _deep() -> float:
 # a helpful one. Climbs with both ramps so a long high-score run keeps getting meaner;
 # capped below 1.0 so there's always a sliver of breathing room (and the rescue power).
 func _hard_bias() -> float:
-	return clampf(lerpf(0.0, 0.47, _difficulty()) + lerpf(0.0, 0.18, _deep()), 0.0, 0.65)
+	return clampf(lerpf(0.0, 0.34, _difficulty()) + lerpf(0.0, 0.12, _deep()), 0.0, 0.48)
 
 # The meanest fitting piece: the more cells it has and the FEWER places it fits, the
 # more it crowds the board and strands gaps. Small random jitter keeps it from handing
@@ -531,7 +531,7 @@ func _wants_clear() -> bool:
 	# difficulty, then keeps growing into the deep game so the board stays full and
 	# the pressure is real at high scores.
 	var drought : int = int(round(
-		lerpf(float(CLEAR_DROUGHT), 52.0, _difficulty()) + lerpf(0.0, 26.0, _deep())))
+		lerpf(float(CLEAR_DROUGHT), 40.0, _difficulty()) + lerpf(0.0, 18.0, _deep())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
@@ -559,12 +559,12 @@ func _fill_pool() -> Array:
 # to 0% by move ~45. Smart picks complete lines (multi-line wins outright);
 # when nothing clears yet, hand out big "builder" pieces so the board fills
 # fast and double/triple clears set themselves up.
-const SMART_FADE_MOVES := 10.0
+const SMART_FADE_MOVES := 16.0
 
 # Early game = a fast "clear the whole board" puzzle. For the first few sets we
 # keep the board SMALL (no big builder dumps) and try to hand the player a piece
 # that can empty the board, so full board-clears happen constantly up front.
-const EARLY_CLEAR_SETS   := 3
+const EARLY_CLEAR_SETS   := 4
 const EARLY_CLEAR_CHANCE := 1.0
 # After this many sets with no full board clear, briefly favour small clearing
 # pieces again (a "drain") to set up another board clear — keeps board clears
@@ -614,7 +614,7 @@ func _pick_shape() -> Array:
 		if not fill.is_empty():
 			return fill
 		return _pick_helpful_shape()
-	var smart_p : float = clampf(0.35 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.35)
+	var smart_p : float = clampf(0.45 * (1.0 - float(placements) / SMART_FADE_MOVES), 0.0, 0.45)
 	if randf() < smart_p:
 		var smart := _pick_combo_shape()
 		if not smart.is_empty():
