@@ -28,9 +28,8 @@ var ad_mode      : String = ""
 var _dx_claimed  : bool   = false
 
 func _ready() -> void:
-	# Transient decorative screen — 30fps is plenty and saves battery on the 120Hz
-	# panel. Game._ready restores 60fps on retry; the menu also runs at 30.
-	Engine.max_fps = 30
+	# 60fps to match the menu and gameplay — the animated bg felt framey at 30.
+	Engine.max_fps = 60
 	for _i in 8:
 		orbs.append({
 			"pos":    Vector2(randf() * 414.0, randf() * 896.0),
