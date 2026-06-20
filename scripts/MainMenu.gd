@@ -1576,9 +1576,14 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -
 	else:
 		sb.bg_color = Color(1, 1, 1, 0.05)
 	card.add_theme_stylebox_override("panel", sb)
+	# Let a press-and-drag ANYWHERE on the row reach the ScrollContainer behind it,
+	# so the whole list scrolls by touch (not only via the scrollbar) — like the
+	# achievements list. The card passes the drag through; its children ignore it.
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(row)
 
 	# Rank-tier pin (kept as an empty slot when none, so columns stay aligned)
@@ -1593,6 +1598,7 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -
 	elif rank == 3: rcol = Color(0.90, 0.62, 0.36)
 	rank_lbl.add_theme_color_override("font_color", rcol)
 	rank_lbl.custom_minimum_size = Vector2(48, 0)
+	rank_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(rank_lbl)
 
 	var name_lbl := Label.new()
@@ -1600,12 +1606,14 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -
 	name_lbl.add_theme_font_size_override("font_size", 18)
 	name_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_lbl)
 
 	var score_lbl := Label.new()
 	score_lbl.text = _fmt_num(score)
 	score_lbl.add_theme_font_size_override("font_size", 18)
 	score_lbl.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
+	score_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(score_lbl)
 	return card
 
@@ -1627,6 +1635,7 @@ func _rank_tier(rank: int) -> int:
 func _make_rank_pin(tier: int) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(32, 32)   # fixed slot keeps the rank column aligned
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE   # never swallow the list's scroll drag
 	if tier > 0:
 		c.draw.connect(func(): _draw_pin(c, Vector2(16, 16), 9.0, tier))
 	return c
