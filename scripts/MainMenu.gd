@@ -51,6 +51,11 @@ var time_t  : float = 0.0
 var letters      : Array = []   # {lbl, base_pos, phase}
 var bobbing      : bool  = false
 var cat_progress : int   = 0    # secret: tap S-T-A-X in order to toggle cat mode
+# DEV TOOLS: shows an "UNLOCK ALL (DEV)" button in Settings that maxes level + every
+# skin for on-device testing. ⚠️ SET FALSE BEFORE ANY PUBLIC STORE BUILD (TestFlight /
+# closed beta only). Leaving it true would let real players unlock everything for free.
+const DEV_TOOLS := true
+
 var settings_box : PanelContainer
 var play_pulse   : Tween
 var faller_layer : Node2D
@@ -2072,6 +2077,18 @@ func _build_settings_panel() -> void:
 		settings_box.visible = false
 		_open_account())
 	vbox.add_child(account)
+
+	if DEV_TOOLS:
+		var dev := _make_chunky_button("UNLOCK ALL (DEV)", Color(0.55, 0.55, 0.62), 18)
+		dev.custom_minimum_size = Vector2(0, 56)
+		dev.pressed.connect(func():
+			Sfx.play_click()
+			GameState.dev_unlock_all()
+			_refresh_menu_buttons()   # leaderboard/biomes unlock immediately
+			_refresh_profile()        # level pin updates
+			ui.move_child(settings_box, ui.get_child_count() - 1)   # keep panel in front
+			_flash_btn(dev, "UNLOCKED!", "UNLOCK ALL (DEV)"))
+		vbox.add_child(dev)
 
 	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 20)
 	close.custom_minimum_size = Vector2(0, 56)

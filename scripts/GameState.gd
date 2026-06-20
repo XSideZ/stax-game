@@ -408,6 +408,24 @@ func get_level() -> int:
 func xp_progress() -> Array:
 	return progress_for_xp(player_xp)
 
+# DEV ONLY: instantly grant max level + every skin, for on-device testing. Wired to a
+# button gated behind MainMenu.DEV_TOOLS — flip that flag false before any public build.
+func dev_unlock_all() -> void:
+	# Max XP -> level 100, which unlocks every "L<n>" skin AND the leaderboard/biomes gates.
+	var need := 0
+	for lvl in range(1, MAX_LEVEL):
+		need += xp_cost(lvl)
+	player_xp = maxi(player_xp, need)
+	# Complete every achievement tier so the 5 achievement-gated skins unlock too.
+	for g in ACH_GROUPS:
+		for ti in g["tiers"].size():
+			unlocked["%s_%d" % [g["id"], ti]] = true
+	# Pre-mark every skin as "seen" so re-opening the menu doesn't flood unlock toasts.
+	skins_seen.clear()
+	for i in CAT_SKIN:
+		skins_seen.append(i)
+	_save()
+
 func set_player_name(n: String) -> void:
 	player_name = n.strip_edges().substr(0, 12)
 	_save()
