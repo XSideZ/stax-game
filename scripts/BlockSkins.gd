@@ -31,8 +31,9 @@ const BAYER4 : Array = [
 ]
 
 # Styles whose effects hang BELOW the block (drips) — on the grid these must
-# be painted in a second pass after all cells, or the row below covers them
-const OVERLAY_STYLES : Array = [12, 18]
+# be painted in a second pass after all cells, or the row below covers them.
+# (Honey (12) used to drip here; it's now a static comb, so only slime (18) remains.)
+const OVERLAY_STYLES : Array = [18]
 
 # Reused single-colour buffer for draw_polygon — avoids allocating a fresh
 # PackedColorArray on every one of the ~1000s of poly fills per frame (the GC
@@ -720,39 +721,57 @@ static func _wood(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, se
 		ci.draw_line(core + dir2 * s * 0.07, core + dir2 * s * 0.34, w.darkened(0.45), 1.3)
 	rr_outline(ci, r, rad, w.darkened(0.45), 1.5)
 
-# ── 12 HONEY (animated: continuous honeycomb + oozing drip) ──────────────────
-static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, _pr: Rect2 = Rect2()) -> void:
-	# Self-contained amber cell (cheap/static): gradient + a full 7-cell honeycomb, a
-	# settled honey pool at the bottom, sheen + bubbles. No clipping or board loops.
+# ── 12 HONEY (static: ONE continuous honeycomb across the whole board) ───────
+# The wax walls are the light gradient base; the darker hex cells are tiled in
+# pr (pattern) space so the comb runs UNBROKEN from block to block, each hex
+# clipped to its block. Coarsened vs the original (bigger hexes => ~3-5 per cell
+# instead of ~12-16) so it keeps the parallax look at the sakura/gold budget.
+static func _honey(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int, pr: Rect2 = Rect2()) -> void:
+	var ps := pr.size.x if pr.size.x > 0.0 else s
+	# Every piece colour maps to a SHADE OF AMBER so pieces stay tellable apart.
 	var tone := fmod(col.h * 2.7 + col.v * 0.5, 1.0)
 	var hn := Color(1.00, 0.76, 0.28).lerp(Color(0.78, 0.48, 0.10), tone)
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.03, s * 0.06), r.size), rad, Color(0, 0, 0, 0.30))
-	rr_grad(ci, r, rad, hn.lightened(0.38), hn.lightened(0.02))
-	# Honey settled darker toward the bottom (depth)
-	rr_fill(ci, Rect2(r.position.x + s * 0.07, r.position.y + r.size.y * 0.60, r.size.x - s * 0.14, r.size.y * 0.32),
-		s * 0.05, hn.darkened(0.16))
-	# Full honeycomb: a centre cell ringed by six, all inside the block (no clipping)
-	var c := r.get_center()
-	var hr := s * 0.135
-	var d := hr * 1.78
-	var combs : Array = [c]
-	for n in 6:
-		var ang := PI / 6.0 + float(n) * PI / 3.0
-		combs.append(c + Vector2(cos(ang), sin(ang)) * d)
-	for k in combs.size():
-		var hc : Vector2 = combs[k]
-		var hex := PackedVector2Array()
-		for i in 6:
-			var a := PI / 6.0 + float(i) * PI / 3.0
-			hex.append(hc + Vector2(cos(a), sin(a)) * hr)
-		draw_poly_safe(ci, hex, hn.darkened(0.16 + float((k * 5) % 4) * 0.05), true)
-		ci.draw_circle(hc - Vector2(hr * 0.2, hr * 0.2), hr * 0.18, hn.lightened(0.42))
-	# Glossy shine band + a sheen blob + two air bubbles
+	# Light base = the wax walls; the darker hex cells get drawn on top
+	rr_grad(ci, r, rad, hn.lightened(0.38), hn.lightened(0.04))
+	var inner := r.grow(-s * 0.045)
+	# Honeycomb tiled in ABSOLUTE canvas space — one continuous comb across all
+	# neighbouring blocks. Computed in pr-space and shifted by delta so the drag
+	# hover preview samples BOARD-space comb (matches the placed result); tiny
+	# squash wobble is zeroed so the pattern stays put during landing animations.
+	var hs := ps * 0.42            # hex radius (coarse => few hexes per cell)
+	var hw := sqrt(3.0) * hs       # horizontal lattice spacing
+	var vstep := 1.5 * hs          # vertical lattice spacing
+	var delta := r.position - pr.position
+	if delta.length() < s * 0.5:
+		delta = Vector2.ZERO
+	var row0 := int(floor((pr.position.y - hs) / vstep))
+	var row1 := int(ceil((pr.end.y + hs) / vstep))
+	for row in range(row0, row1 + 1):
+		var cy := float(row) * vstep
+		var xoff := hw * 0.5 if posmod(row, 2) == 1 else 0.0
+		var q0 := int(floor((pr.position.x - hw) / hw))
+		var q1 := int(ceil((pr.end.x + hw) / hw))
+		for q in range(q0, q1 + 1):
+			var cx := float(q) * hw + xoff
+			var hc := Vector2(cx, cy) + delta
+			var hh := absi((q * 73856093) ^ (row * 19349663))
+			var hex := PackedVector2Array()
+			var fully_inside := true
+			for i in 6:
+				var a := PI / 6.0 + float(i) * PI / 3.0
+				var pt := hc + Vector2(cos(a), sin(a)) * hs * 0.90
+				hex.append(pt)
+				if not inner.has_point(pt):
+					fully_inside = false
+			draw_poly_safe(ci, clip_poly_to_rect(hex, inner), hn.darkened(0.20 + float(hh % 5) * 0.05), true)
+			# Wax-capped cell highlight — only when the whole hex fits inside this
+			# block (rare at this coarseness, so it stays cheap + never spills)
+			if fully_inside and hh % 3 == 0:
+				ci.draw_circle(hc - Vector2(hs * 0.18, hs * 0.18), hs * 0.16, hn.lightened(0.42))
+	# Glossy shine band across the top + outline
 	rr_fill(ci, Rect2(r.position + Vector2(s * 0.10, s * 0.06), Vector2(r.size.x - s * 0.20, s * 0.08)),
 		s * 0.04, Color(1, 1, 0.85, 0.30))
-	ci.draw_circle(r.position + r.size * Vector2(0.30, 0.24), s * 0.05, Color(1, 1, 0.9, 0.16))
-	ci.draw_circle(r.position + r.size * Vector2(0.70, 0.72), s * 0.035, Color(1, 1, 0.85, 0.22))
-	ci.draw_circle(r.position + r.size * Vector2(0.62, 0.66), s * 0.018, Color(1, 1, 0.95, 0.30))
 	rr_outline(ci, r, rad, hn.darkened(0.35), 1.5)
 
 # Overlay pass: effects that hang below the block (drawn after all grid cells)
