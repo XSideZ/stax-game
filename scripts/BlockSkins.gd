@@ -1448,10 +1448,15 @@ static func _stained(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float,
 			var shade : float = 0.84 + 0.16 * float(hsh % 7) / 7.0   # pane-to-pane variation
 			var lit := jewel.lerp(Color(1.0, 0.99, 0.94), 0.28)
 			draw_poly_safe(ci, clipped, Color(lit.r * shade, lit.g * shade, lit.b * shade, 0.95), true)
-			# Came bevel + centre glint — only when the diamond's centre is in THIS
-			# block (bounded, and keeps the came lines out of the gaps between blocks)
-			if inner.has_point(Vector2(cx, cy)):
-				ci.draw_line(Vector2(cx, cy - gg), Vector2(cx - gg, cy), jewel.lightened(0.5), 1.0)
+			# Lead-came highlight + centre glint — the diamond is BIGGER than a cell, so
+			# its raw vertices can sit OUTSIDE this block. Draw the bevel only when BOTH
+			# its endpoints are inside, and the glint only when the whole circle fits —
+			# otherwise the highlights spill past the block edge (the "lines outside" bug).
+			var v_top := Vector2(cx, cy - gg)
+			var v_left := Vector2(cx - gg, cy)
+			if inner.has_point(v_top) and inner.has_point(v_left):
+				ci.draw_line(v_top, v_left, jewel.lightened(0.5), 1.0)
+			if inner.grow(-gg * 0.18).has_point(Vector2(cx, cy)):
 				ci.draw_circle(Vector2(cx, cy), gg * 0.16, Color(1, 1, 1, 0.16))
 	rr_outline(ci, r, rad, Color(0.02, 0.02, 0.03, 0.95), 2.0)
 
