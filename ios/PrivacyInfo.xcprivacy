@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required Reason APIs the Godot engine + this game use. -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!-- File timestamp: save-game atomic write checks file existence + replaces -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>DDA9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- System boot time: Godot's high-resolution timing for animations / frame deltas -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- Disk space: Godot writes saves, caches imported assets -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+				<string>85F4.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- UserDefaults: Godot persists app state (user://) which maps to NSUserDefaults
+				 on iOS, plus the AdMob plugin caches consent state there. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- AdMob (a third-party SDK linked into this app) uses IDFA for personalised
+		 ads + measurement when the user grants AppTrackingTransparency, which per
+		 Apple's definition counts as the app "engaging in tracking". The actual
+		 NSPrivacyTrackingDomains list lives in AdMob's own embedded PrivacyInfo
+		 (GoogleMobileAds.xcframework) — Apple aggregates the manifests; we don't
+		 add to the domain list here. We never share data with other companies
+		 ourselves; the Supabase leaderboard fields are app-functionality only. -->
+	<key>NSPrivacyTracking</key>
+	<true/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!-- Data this game itself collects + sends off-device (excluding AdMob, which has
+		 its own manifest). The leaderboard / cloud-backup flow sends a device-generated
+		 user id, a chosen display name, and the player's high score / friend code to
+		 the game's own Supabase backend for app functionality. No analytics. -->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
