@@ -201,7 +201,13 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 	if pr.size.x <= 0.0:
 		pr = r
 	# Texture-cache fast path — only for static, non-squashed, no-glow cells.
-	var cacheable := s > 0.0 \
+	# TEMPORARILY DISABLED (build 55): the SubViewport bake captures in a slightly
+	# different color space than the main viewport, causing visible brightness drop
+	# on placement (cell dims when squash animation ends and cache kicks in). Also
+	# breaks canvas-continuous skins (honey hex pattern, etc.). Will re-enable once
+	# color match is fixed. Build 53's idle-redraw skip + menu throttle wins are kept.
+	var cacheable := false \
+		and s > 0.0 \
 		and not ANIMATED.has(style) \
 		and not OVERLAY_STYLES.has(style) \
 		and glow == 0.0 \
