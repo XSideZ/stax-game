@@ -13,7 +13,7 @@ extends RefCounted
 
 # NOTE: honey(12) + stained(26) were rebuilt as cheap STATIC skins (no per-frame motion);
 # aurora(20) + opal(22, replaced marble) are cheap but ANIMATED (legendary shimmer).
-const ANIMATED : Array = [2, 6, 7, 8, 9, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30]
+const ANIMATED : Array = [2, 4, 6, 7, 8, 9, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30]
 
 # Rarity per skin (0 COMMON · 1 RARE · 2 EPIC · 3 LEGENDARY), mirrors the Biomes
 # gallery tiers.
@@ -128,11 +128,104 @@ const DEMO_SHAPES : Array = [
 # pr: the block's RESTING rect — canvas-continuous skins (honey/sakura/metals)
 # derive their pattern scale from it so squash/stretch animations don't
 # momentarily resize the shared pattern and tear it against neighbours.
+# Skin-cell texture cache. The first time a (style, color, seed_v, cell_size)
+# tuple is painted, paint() draws live AND kicks off a one-frame SubViewport
+# bake. On the next frame the bake completes and the texture replaces the live
+# render — every subsequent paint of that cell type is one draw_texture_rect.
+# This is the main battery-cost reduction: a board full of brick cells used
+# to do ~6 draw calls per cell per frame; now it's 1 per cell after warm-up.
+#
+# Bypasses (still paint live every frame):
+#   • Animated styles (ANIMATED list) — they actually change frame to frame
+#   • Squashed cells (rect ≠ parent rect) — the squash distorts geometry
+#   • Glow-pulsing cells (line-clear preview) — glow is a continuous variable
+#   • Overlay styles (OVERLAY_STYLES) — drips render in a second pass
+static var _cache       : Dictionary = {}      # key -> ImageTexture
+static var _baking      : Dictionary = {}      # key -> true while a bake is in-flight
+static var _bake_root   : Node       = null    # parent for off-screen SubViewports
+const _CELL_SIZE_BUCKET := 2.0                 # quantize size to 2px so menu fallers
+                                                # (random 11-17px) share cache entries
+
+static func _cache_key(style: int, col: Color, seed_v: int, cell_size: float) -> String:
+	var sz := int(roundf(cell_size / _CELL_SIZE_BUCKET) * _CELL_SIZE_BUCKET)
+	var cr := int(col.r * 255.0) & 0xFF
+	var cg := int(col.g * 255.0) & 0xFF
+	var cb := int(col.b * 255.0) & 0xFF
+	# seed_v masked to 5 bits → ≤32 variations per (style, color) — plenty for
+	# the brick-stagger / cell-noise patterns, bounds cache size.
+	return "%d_%d_%d_%d_%d_%d" % [style, cr, cg, cb, seed_v & 0x1F, sz]
+
+static func _request_bake(key: String, style: int, col: Color, seed_v: int, cell_size: float) -> void:
+	if _baking.has(key):
+		return
+	_baking[key] = true
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null or tree.root == null:
+		_baking.erase(key)
+		return
+	if _bake_root == null or not is_instance_valid(_bake_root):
+		_bake_root = Node.new()
+		_bake_root.name = "_skin_bake_root"
+		tree.root.add_child(_bake_root)
+	var sz := int(roundf(cell_size / _CELL_SIZE_BUCKET) * _CELL_SIZE_BUCKET)
+	var vp := SubViewport.new()
+	vp.size = Vector2i(sz, sz)
+	vp.transparent_bg = true
+	vp.disable_3d = true
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	var painter := Node2D.new()
+	var local_rect := Rect2(0, 0, float(sz), float(sz))
+	painter.draw.connect(func(): _dispatch(painter, style, local_rect, col, seed_v, 0.0, local_rect))
+	vp.add_child(painter)
+	_bake_root.add_child(vp)
+	# Capture AFTER the GPU finishes the next frame's draw. Using process_frame
+	# (which fires BEFORE the frame's render) returns a half-empty image and
+	# bakes a translucent texture — the cell would show through to the board.
+	# frame_post_draw guarantees the SubViewport's UPDATE_ONCE has completed.
+	var capture := func():
+		if not is_instance_valid(vp):
+			_baking.erase(key)
+			return
+		var img : Image = vp.get_texture().get_image()
+		# Reject empty/garbage captures — fall back to live paint forever for this
+		# key rather than caching a transparent texture.
+		if img != null and not img.is_empty() and img.get_size().x > 0:
+			_cache[key] = ImageTexture.create_from_image(img)
+		_baking.erase(key)
+		vp.queue_free()
+	RenderingServer.frame_post_draw.connect(capture, CONNECT_ONE_SHOT)
+
 static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int = 0, glow: float = 0.0, pr: Rect2 = Rect2(), with_overlay: bool = true) -> void:
 	var s   := r.size.x
-	var rad := s * 0.16
 	if pr.size.x <= 0.0:
 		pr = r
+	# Texture-cache fast path — only for static, non-squashed, no-glow cells.
+	var cacheable := s > 0.0 \
+		and not ANIMATED.has(style) \
+		and not OVERLAY_STYLES.has(style) \
+		and glow == 0.0 \
+		and r.size.is_equal_approx(pr.size) \
+		and r.position.is_equal_approx(pr.position)
+	if cacheable:
+		var key := _cache_key(style, col, seed_v, s)
+		var cached : Variant = _cache.get(key)
+		if cached != null:
+			ci.draw_texture_rect(cached, r, false)
+			if with_overlay and OVERLAY_STYLES.has(style):
+				paint_overlay(ci, style, r, col, seed_v)
+			return
+		_request_bake(key, style, col, seed_v, s)
+		# Fall through to live render for this frame — next frame's cache hit.
+	_dispatch(ci, style, r, col, seed_v, glow, pr)
+	if with_overlay and OVERLAY_STYLES.has(style):
+		paint_overlay(ci, style, r, col, seed_v)
+
+# Bare dispatch — shared by paint() (live render path) and _request_bake() (offline
+# render path). No cache check here; the cache decision happens in paint().
+static func _dispatch(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int, glow: float, pr: Rect2) -> void:
+	var s   := r.size.x
+	var rad := s * 0.16
 	match style:
 		0:  _pastel(ci, r, col, s, rad)
 		1:  _neon(ci, r, col, s, rad)
@@ -165,8 +258,6 @@ static func paint(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: int 
 		28: _autumn(ci, r, col, s, rad, seed_v, pr)
 		29: _warp(ci, r, col, s, rad, seed_v)
 		30: _cat(ci, r, col, s, rad, seed_v)
-	if with_overlay and OVERLAY_STYLES.has(style):
-		paint_overlay(ci, style, r, col, seed_v)
 
 # ── Polygon clipping (Sutherland–Hodgman vs axis-aligned rect) ────────────────
 # Lets cross-block animations (sakura petals, metal gleams) be drawn by every
@@ -391,52 +482,54 @@ static func _brick(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, s
 				s * 0.030, Color(0.45, 0.65, 0.30, 0.55))
 	rr_outline(ci, r, rad, col.darkened(0.40), 1.5)
 
-# ── 4 CRYSTAL (v4: the block IS a cut gem — octagonal emerald cut) ───────────
-static func _crystal(ci: CanvasItem, r: Rect2, col: Color, s: float, _rad: float, _seed_v: int = 0) -> void:
-	var cut := s * 0.24
-	var oct := PackedVector2Array([
-		Vector2(r.position.x + cut, r.position.y),
-		Vector2(r.end.x - cut, r.position.y),
-		Vector2(r.end.x, r.position.y + cut),
-		Vector2(r.end.x, r.end.y - cut),
-		Vector2(r.end.x - cut, r.end.y),
-		Vector2(r.position.x + cut, r.end.y),
-		Vector2(r.position.x, r.end.y - cut),
-		Vector2(r.position.x, r.position.y + cut),
-	])
-	# Drop shadow (same octagon, offset)
-	var sh := PackedVector2Array()
-	for p in oct:
-		sh.append(p + Vector2(s * 0.03, s * 0.06))
-	ci.draw_polygon(sh, PackedColorArray([Color(0, 0, 0, 0.30)]))
-	# Rim gradient — lit from above
-	var rim_cols := PackedColorArray()
-	for p in oct:
-		rim_cols.append(col.lightened(0.30).lerp(col.darkened(0.28),
-			clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
-	ci.draw_polygon(oct, rim_cols)
-	# Inner table — the flat bright face of the gem
+# ── 4 CRYSTAL (v5: animated brilliant-cut diamond — facets + drifting sparkle)
+# Performance: gradient + 4 convex tris + ~6 lines + 2 sparkle circles per frame.
+# Animated via seed_v + Time → drift inside the gem; cheap enough at any cell count.
+static func _crystal(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int = 0) -> void:
+	var t := Time.get_ticks_msec() * 0.001
+	var sv := float(seed_v)
 	var c := r.get_center()
-	var table := PackedVector2Array()
-	for p in oct:
-		table.append(c + (p - c) * 0.54)
-	var table_cols := PackedColorArray()
-	for p in table:
-		table_cols.append(col.lightened(0.60).lerp(col.lightened(0.18),
-			clampf((p.y - r.position.y) / r.size.y, 0.0, 1.0)))
-	ci.draw_polygon(table, table_cols)
-	# Facet edges from rim corners to table corners
-	for i in oct.size():
-		ci.draw_line(oct[i], table[i], Color(1, 1, 1, 0.22), 1.0)
-	# Outlines
-	var oct_closed := oct.duplicate(); oct_closed.append(oct[0])
-	ci.draw_polyline(oct_closed, col.lightened(0.45), 1.5)
-	var tbl_closed := table.duplicate(); tbl_closed.append(table[0])
-	ci.draw_polyline(tbl_closed, Color(1, 1, 1, 0.40), 1.0)
-	# Glint stroke across the table + a sparkle dot
-	ci.draw_line(c + Vector2(-s * 0.14, -s * 0.06), c + Vector2(-s * 0.04, -s * 0.16),
-		Color(1, 1, 1, 0.75), 2.0)
-	ci.draw_circle(c + Vector2(s * 0.12, s * 0.10), s * 0.030, Color(1, 1, 1, 0.65))
+	# Drop shadow
+	rr_fill(ci, Rect2(r.position + Vector2(s * 0.04, s * 0.07), r.size), rad, Color(0, 0, 0, 0.32))
+	# Saturated body — darker at top, glow-through at bottom (light passes through the gem)
+	rr_grad(ci, r, rad, col.darkened(0.32), col.lightened(0.28))
+	# Facet geometry: 4 inset corners meeting at an apex pulled slightly below centre
+	var apex := c + Vector2(0.0, s * 0.06)
+	var tl := r.position + Vector2(s * 0.10, s * 0.10)
+	var tr := Vector2(r.end.x - s * 0.10, r.position.y + s * 0.10)
+	var bl := Vector2(r.position.x + s * 0.10, r.end.y - s * 0.10)
+	var br := r.end - Vector2(s * 0.10, s * 0.10)
+	# Top "table" facet — brightest, the flat lit face of the cut
+	draw_poly_safe(ci, PackedVector2Array([tl, tr, apex]), col.lightened(0.55), true)
+	# Left facet — catches glancing light
+	draw_poly_safe(ci, PackedVector2Array([bl, tl, apex]), col.lightened(0.25), true)
+	# Right facet — mid tone
+	draw_poly_safe(ci, PackedVector2Array([tr, br, apex]), col.lightened(0.05), true)
+	# Bottom facet — darkest (pavilion in shadow)
+	draw_poly_safe(ci, PackedVector2Array([br, bl, apex]), col.darkened(0.22), true)
+	# Facet seams + table edge
+	var seam := Color(1, 1, 1, 0.30)
+	ci.draw_line(tl, apex, seam, 1.0)
+	ci.draw_line(tr, apex, seam, 1.0)
+	ci.draw_line(br, apex, seam, 1.0)
+	ci.draw_line(bl, apex, seam, 1.0)
+	ci.draw_line(tl, tr, seam, 1.0)
+	# Specular slash on the top-left facet (classic gem glint)
+	var hi_a := tl + (tr - tl) * 0.18 + (apex - tl) * 0.10
+	var hi_b := tl + (tr - tl) * 0.44 + (apex - tl) * 0.24
+	ci.draw_line(hi_a, hi_b, Color(1, 1, 1, 0.85), 2.2)
+	# Two drifting sparkles — pulse + slow lissajous around the apex
+	var p1 := 0.5 + 0.5 * sin(t * 2.0 + sv * 0.31)
+	var p2 := 0.5 + 0.5 * sin(t * 2.7 + sv * 0.71 + 1.5)
+	var sp1 := apex + Vector2(s * 0.18 * sin(t * 0.7 + sv * 0.5),
+	                          s * 0.10 * cos(t * 1.0 + sv * 0.5))
+	var sp2 := apex + Vector2(s * 0.22 * cos(t * 0.5 + sv * 0.9),
+	                          s * 0.13 * sin(t * 0.9 + sv * 0.9))
+	ci.draw_circle(sp1, s * 0.045 * (0.5 + 0.7 * p1), Color(1, 1, 1, 0.45 + 0.45 * p1))
+	ci.draw_circle(sp2, s * 0.034 * (0.5 + 0.7 * p2), Color(1, 1, 1, 0.35 + 0.45 * p2))
+	# Outlines: bright rim + thin inner white accent
+	rr_outline(ci, r, rad, col.lightened(0.55), 1.6)
+	rr_outline(ci, r.grow(-s * 0.05), rad * 0.82, Color(1, 1, 1, 0.22), 1.0)
 
 # ── 5 CANDY (candy cane: diagonal stripes in the piece colour over white) ────
 static func _candy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int = 0) -> void:

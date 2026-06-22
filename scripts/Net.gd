@@ -17,6 +17,8 @@ signal global_board(rows: Array)
 signal friends_board(rows: Array)
 # Emitted with the friend's name on success, or "" if the code was invalid.
 signal friend_added(friend_name: String)
+# Emitted with the removed friend's code on success, or "" on failure.
+signal friend_removed(code: String)
 
 func is_configured() -> bool:
 	return not SUPABASE_URL.begins_with("https://YOUR_PROJECT") \
@@ -78,4 +80,11 @@ func add_friend(pid: String, code: String) -> void:
 	_rpc("add_friend_by_code", {"p_id": pid, "p_code": code.strip_edges().to_upper()},
 		func(ok: bool, res: Variant):
 			friend_added.emit(res if (ok and res is String) else "")
+	)
+
+func remove_friend(pid: String, code: String) -> void:
+	var norm := code.strip_edges().to_upper()
+	_rpc("remove_friend_by_code", {"p_id": pid, "p_code": norm},
+		func(ok: bool, res: Variant):
+			friend_removed.emit(norm if (ok and res == true) else "")
 	)

@@ -47,6 +47,7 @@ const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 var orbs    : Array = []
 var fallers : Array = []
 var time_t  : float = 0.0
+var _faller_redraw_accum : float = 0.0   # throttles faller_layer repaint to ~30fps
 
 var letters      : Array = []   # {lbl, base_pos, phase}
 var bobbing      : bool  = false
@@ -167,13 +168,18 @@ func _process(delta: float) -> void:
 			lbl.rotation_degrees = sin(time_t * 1.6 + entry["phase"]) * 3.0
 
 	queue_redraw()
-	faller_layer.queue_redraw()
-
-	# Keep animated biome previews alive while the gallery is open
-	if biome_box != null and biome_box.visible:
-		for sw in biome_swatches:
-			if is_instance_valid(sw):
-				sw.queue_redraw()
+	# Faller layer is the expensive one — every faller calls BlockSkins.paint
+	# (many draw calls per cell). 30fps is imperceptible for slow decorative
+	# motion and roughly halves the menu's per-second drawing cost. Same logic
+	# for the biome-gallery previews (also full skin renders).
+	_faller_redraw_accum += delta
+	if _faller_redraw_accum >= 1.0 / 30.0:
+		_faller_redraw_accum = 0.0
+		faller_layer.queue_redraw()
+		if biome_box != null and biome_box.visible:
+			for sw in biome_swatches:
+				if is_instance_valid(sw):
+					sw.queue_redraw()
 
 # ── Background drawing — follows the selected skin's theme live ─────────────
 func _draw() -> void:
@@ -1482,6 +1488,8 @@ func _build_leaderboard_panel() -> void:
 		Net.friends_board.connect(_on_friends_board)
 	if not Net.friend_added.is_connected(_on_friend_added):
 		Net.friend_added.connect(_on_friend_added)
+	if not Net.friend_removed.is_connected(_on_friend_removed):
+		Net.friend_removed.connect(_on_friend_removed)
 
 func _open_leaderboard() -> void:
 	lb_box.visible = true
@@ -1543,12 +1551,20 @@ func _populate_board(rows: Array, is_friends: bool) -> void:
 		var rank : int    = int(row.get("rank", 0))
 		var nm   : String = str(row.get("name", "?"))
 		var sc   : int    = int(row.get("best_score", 0))
+		var lv   : int    = int(row.get("level", 0))
 		var mine : bool
 		if is_friends:
 			mine = bool(row.get("is_me", false))
 		else:
 			mine = nm == GameState.player_name and sc == GameState.best_score
-		lb_rows.add_child(_make_board_row(rank, nm, sc, mine, _row_tier(row, is_friends, mine)))
+		# Pass the friend_code only for friend-tab rows that aren't "me" — tapping
+		# the row opens the friend-actions menu (Stats / Remove). Empty string = not tappable.
+		var fcode : String = ""
+		if is_friends and not mine:
+			fcode = str(row.get("friend_code", ""))
+		var gr : int = int(row.get("global_rank", 0))
+		lb_rows.add_child(_make_board_row(rank, nm, sc, lv, mine,
+			_row_tier(row, is_friends, mine), fcode, gr))
 
 # Pin tier for a board row. Global board: the row's rank IS the global rank. Friends
 # board: use a global_rank field if the backend supplies one, else show only YOUR own
@@ -1563,7 +1579,7 @@ func _row_tier(row: Dictionary, is_friends: bool, mine: bool) -> int:
 		return _rank_tier(GameState.my_global_rank)
 	return 0
 
-func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -> PanelContainer:
+func _make_board_row(rank: int, nm: String, score: int, lv: int, mine: bool, tier: int, fcode: String = "", global_rank: int = 0) -> PanelContainer:
 	var card := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.set_corner_radius_all(10)
@@ -1605,9 +1621,23 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -
 	name_lbl.text = nm
 	name_lbl.add_theme_font_size_override("font_size", 18)
 	name_lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_lbl)
+
+	# Level shown inline as "(12)" right after the name. Hidden when level is 0.
+	if lv > 0:
+		var lv_lbl := Label.new()
+		lv_lbl.text = "(" + str(lv) + ")"
+		lv_lbl.add_theme_font_size_override("font_size", 14)
+		lv_lbl.add_theme_color_override("font_color", Color(0.62, 0.85, 1.0, 0.85))
+		lv_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(lv_lbl)
+
+	# Spacer pushes the score (and remove button) to the right edge.
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(spacer)
 
 	var score_lbl := Label.new()
 	score_lbl.text = _fmt_num(score)
@@ -1615,6 +1645,18 @@ func _make_board_row(rank: int, nm: String, score: int, mine: bool, tier: int) -
 	score_lbl.add_theme_color_override("font_color", Color(1, 0.92, 0.6))
 	score_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(score_lbl)
+
+	# Friend-tab rows for non-self are tappable: opens the friend actions menu
+	# (Stats / Remove). Press-position tracking distinguishes a tap from a list scroll.
+	if fcode != "":
+		var press_pos : Array = [Vector2(-9999, -9999)]
+		card.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT:
+				if ev.pressed:
+					press_pos[0] = ev.position
+				elif press_pos[0].distance_to(ev.position) < 10.0:
+					_open_friend_actions(fcode, nm, lv, score, global_rank)
+		)
 	return card
 
 # ── Rank pins: a medallion ladder by GLOBAL rank ─────────────────────────────
@@ -1737,6 +1779,160 @@ func _on_friend_added(friend_name: String) -> void:
 	_flash_lb_status("Added " + friend_name + "!", Color(0.55, 0.9, 0.55))
 	if lb_tab == "friends":
 		Net.fetch_friends(GameState.player_id)
+
+func _on_remove_friend_pressed(code: String, nm: String) -> void:
+	if not Net.is_configured() or code == "":
+		return
+	Sfx.play_click()
+	_flash_lb_status("Removing " + nm + "…", Color(1, 1, 1, 0.7))
+	Net.remove_friend(GameState.player_id, code)
+
+func _on_friend_removed(code: String) -> void:
+	if lb_box == null or not lb_box.visible:
+		return
+	if code == "":
+		_flash_lb_status("Couldn't remove friend", Color(1.0, 0.5, 0.4))
+		return
+	_flash_lb_status("Friend removed", Color(0.85, 0.85, 0.85))
+	if lb_tab == "friends":
+		Net.fetch_friends(GameState.player_id)
+
+# ── Friend actions menu (Stats / Remove) — tap a friend row to open ─────────
+var friend_actions_overlay : Control
+
+func _close_friend_actions() -> void:
+	if friend_actions_overlay != null and is_instance_valid(friend_actions_overlay):
+		friend_actions_overlay.queue_free()
+	friend_actions_overlay = null
+
+func _open_friend_actions(fcode: String, nm: String, lv: int, sc: int, gr: int) -> void:
+	Sfx.play_click()
+	_close_friend_actions()
+	friend_actions_overlay = _build_friend_modal(_make_friend_actions_box(fcode, nm, lv, sc, gr))
+
+# Switches the modal content to the stats view without closing the overlay.
+func _show_friend_stats(fcode: String, nm: String, lv: int, sc: int, gr: int) -> void:
+	Sfx.play_click()
+	_close_friend_actions()
+	friend_actions_overlay = _build_friend_modal(_make_friend_stats_box(fcode, nm, lv, sc, gr))
+
+# Full-screen dimmed overlay with a centered box. Tapping the dim closes the modal.
+func _build_friend_modal(box: PanelContainer) -> Control:
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui.add_child(overlay)
+	ui.move_child(overlay, ui.get_child_count() - 1)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.0)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and not ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			_close_friend_actions()
+	)
+	overlay.add_child(dim)
+	create_tween().tween_property(dim, "color", Color(0, 0, 0, 0.55), 0.18)
+
+	overlay.add_child(box)
+	box.position = Vector2(37, 320)
+	box.custom_minimum_size = Vector2(340, 0)
+	box.pivot_offset = Vector2(170, 120)
+	box.scale = Vector2(0.85, 0.85)
+	create_tween().tween_property(box, "scale", Vector2.ONE, 0.22) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	return overlay
+
+func _make_friend_modal_box() -> PanelContainer:
+	var box := PanelContainer.new()
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.13, 0.11, 0.20)
+	psb.set_corner_radius_all(20)
+	psb.border_width_bottom = 6
+	psb.border_color = Color(0.06, 0.05, 0.10)
+	psb.content_margin_left = 22; psb.content_margin_right = 22
+	psb.content_margin_top = 18;  psb.content_margin_bottom = 18
+	box.add_theme_stylebox_override("panel", psb)
+	return box
+
+func _make_friend_actions_box(fcode: String, nm: String, lv: int, sc: int, gr: int) -> PanelContainer:
+	var box := _make_friend_modal_box()
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	box.add_child(vb)
+
+	var hdr := Label.new()
+	hdr.text = nm
+	hdr.add_theme_font_size_override("font_size", 26)
+	hdr.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hdr)
+
+	var stats := _make_chunky_button("STATS", Color(0.30, 0.65, 0.95), 20)
+	stats.pressed.connect(func(): _show_friend_stats(fcode, nm, lv, sc, gr))
+	vb.add_child(stats)
+
+	var rm := _make_chunky_button("REMOVE FRIEND", Color(0.90, 0.35, 0.35), 20)
+	rm.pressed.connect(func():
+		_close_friend_actions()
+		_on_remove_friend_pressed(fcode, nm)
+	)
+	vb.add_child(rm)
+
+	var cancel := _make_chunky_button("CANCEL", Color(0.45, 0.45, 0.50), 18)
+	cancel.pressed.connect(_close_friend_actions)
+	vb.add_child(cancel)
+	return box
+
+func _make_friend_stats_box(fcode: String, nm: String, lv: int, sc: int, gr: int) -> PanelContainer:
+	var box := _make_friend_modal_box()
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	box.add_child(vb)
+
+	var hdr := Label.new()
+	hdr.text = nm + "'S STATS"
+	hdr.add_theme_font_size_override("font_size", 22)
+	hdr.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hdr)
+
+	var sep := Control.new()
+	sep.custom_minimum_size = Vector2(0, 6)
+	vb.add_child(sep)
+
+	vb.add_child(_make_stat_row("GLOBAL RANK", ("#" + str(gr)) if gr > 0 else "—",
+		Color(1.00, 0.84, 0.25) if gr <= 3 and gr > 0 else Color(1, 1, 1, 0.92)))
+	vb.add_child(_make_stat_row("LEVEL",       str(lv) if lv > 0 else "—",
+		Color(0.62, 0.85, 1.0, 0.95)))
+	vb.add_child(_make_stat_row("BEST SCORE",  _fmt_num(sc), Color(1, 0.92, 0.6)))
+	vb.add_child(_make_stat_row("FRIEND CODE", fcode, Color(0.75, 0.85, 0.80, 0.95)))
+
+	var sep2 := Control.new()
+	sep2.custom_minimum_size = Vector2(0, 8)
+	vb.add_child(sep2)
+
+	var back := _make_chunky_button("BACK", Color(0.45, 0.45, 0.50), 18)
+	back.pressed.connect(func(): _open_friend_actions(fcode, nm, lv, sc, gr))
+	vb.add_child(back)
+	return box
+
+func _make_stat_row(label: String, value: String, val_col: Color) -> HBoxContainer:
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	var lk := Label.new()
+	lk.text = label
+	lk.add_theme_font_size_override("font_size", 15)
+	lk.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	lk.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hb.add_child(lk)
+	var lv := Label.new()
+	lv.text = value
+	lv.add_theme_font_size_override("font_size", 18)
+	lv.add_theme_color_override("font_color", val_col)
+	hb.add_child(lv)
+	return hb
 
 func _flash_lb_status(msg: String, col: Color) -> void:
 	lb_status.text = msg

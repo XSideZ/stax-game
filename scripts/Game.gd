@@ -213,6 +213,9 @@ var rescue_active   : bool  = false
 var rescue_timer    : float = 0.0
 var _was_rescue     : bool  = false   # detect the rescue prompt ending (repaint to clear it)
 var _was_power_busy : bool  = false   # detect when a fired power finishes resolving
+# What power was last fired: 0=none, 1=bomb, 2=twin bomb, 3=ult (gravity).
+# Only the ULT guarantees no-death — a bomb that doesn't open enough space still kills.
+var _last_power     : int   = 0
 
 # Idle background redraws throttle to ~30fps (perf: the parallax skins are the
 # heavy per-frame cost on mobile). Any gameplay action redraws at full 60fps.
@@ -393,14 +396,17 @@ func _process(delta: float) -> void:
 		if rescue_timer <= 0.0:
 			_game_over()
 
-	# Full-rate redraw during any motion; throttle the idle parallax to ~30fps
+	# Full-rate redraw during any motion; throttle the idle parallax to ~30fps.
+	# When the current skin is STATIC (not in BlockSkins.ANIMATED) AND nothing
+	# else is moving, skip the idle redraw entirely — the board hasn't changed
+	# and there's nothing to animate. Big battery saving on static biomes.
 	var busy : bool = shake_t > 0.0 or flash_t > 0.0 or power_pulse > 0.0 \
 		or theme_lerp < 1.0 or tray_pop_t > 0.0 or streak_lost_t > 0.0 \
 		or drag_pop_t > 0.0 or dragging_slot >= 0 or rescue_active \
 		or not effects.is_empty() or disp_score != float(score)
 	if busy:
 		queue_redraw()
-	else:
+	elif BlockSkins.ANIMATED.has(_visual_idx()):
 		_idle_redraw_accum += delta
 		if _idle_redraw_accum >= 1.0 / 30.0:
 			_idle_redraw_accum = 0.0
@@ -429,7 +435,7 @@ func _spawn_pieces() -> void:
 	# ~10k upward the board stops being constantly emptied for you.
 	var forced_clear : Array = []
 	var gift_chance : float = 1.0 if sets_given < EARLY_CLEAR_SETS \
-		else lerpf(0.34, 0.06, _difficulty())
+		else maxf(0.005, lerpf(0.34, 0.06, _difficulty()) - 0.04 * _mastery() - 0.015 * _ultra())
 	if randf() < gift_chance:
 		forced_clear = _pick_board_clear_shape()
 
@@ -475,9 +481,9 @@ func _progression() -> float:
 # MAX of two ramps — sets played AND score — so a fast high-scoring run gets hard on
 # schedule (the 50-100k window was way too easy when difficulty tracked sets alone).
 const DIFF_START := 3.0        # sets before the sets-ramp starts climbing (= early phase)
-const DIFF_LEN   := 22.0       # sets over which the sets-ramp climbs to max (eased: 16→22)
+const DIFF_LEN   := 44.0       # sets over which the sets-ramp climbs to max (eased ×2: 22→44)
 const DIFF_SCORE_START := 2000.0   # score where the score-ramp begins (later: was 1000)
-const DIFF_SCORE_LEN   := 20000.0  # score span to max (~22k → fully hard; eased from ~14k)
+const DIFF_SCORE_LEN   := 40000.0  # score span to max (~42k → fully hard; eased ×2: 20k→40k)
 func _difficulty() -> float:
 	var by_sets  := (float(sets_given) - DIFF_START) / DIFF_LEN
 	var by_score := (float(score) - DIFF_SCORE_START) / DIFF_SCORE_LEN
@@ -486,15 +492,34 @@ func _difficulty() -> float:
 # Deep-run pressure that keeps climbing AFTER _difficulty() has maxed (score 80k→300k),
 # so a long high-score run keeps tightening instead of plateauing at "max" difficulty.
 const DEEP_START := 35000.0
-const DEEP_LEN   := 160000.0
+const DEEP_LEN   := 320000.0   # eased ×2: 160k→320k (deep ramp climbs half as fast)
 func _deep() -> float:
 	return clampf((float(score) - DEEP_START) / DEEP_LEN, 0.0, 1.0)
 
+# Post-100k scaling: the deep ramp maxed at ~355k and the game stopped tightening
+# from there. These two additional ramps keep climbing through the high-score range.
+# Both clamp to 0 below their start so anything under 100k is UNTOUCHED.
+#   MASTERY: intense band 100k → 500k  (the felt-difficulty climb)
+#   ULTRA:   gradual long tail 500k → 10M (smooth continuation, no hard wall)
+const MASTERY_START := 100000.0
+const MASTERY_LEN   := 400000.0
+const ULTRA_START   := 500000.0
+const ULTRA_LEN     := 9500000.0
+func _mastery() -> float:
+	return clampf((float(score) - MASTERY_START) / MASTERY_LEN, 0.0, 1.0)
+func _ultra() -> float:
+	return clampf((float(score) - ULTRA_START) / ULTRA_LEN, 0.0, 1.0)
+
 # How often the spawner deliberately hands a crowding, hard-to-place piece instead of
-# a helpful one. Climbs with both ramps so a long high-score run keeps getting meaner;
-# capped below 1.0 so there's always a sliver of breathing room (and the rescue power).
+# a helpful one. Climbs with all four ramps so a long high-score run keeps getting
+# meaner; capped at 0.70 so there's always breathing room (and the rescue power).
 func _hard_bias() -> float:
-	return clampf(lerpf(0.0, 0.34, _difficulty()) + lerpf(0.0, 0.12, _deep()), 0.0, 0.48)
+	return clampf(
+		lerpf(0.0, 0.34, _difficulty())
+		+ lerpf(0.0, 0.12, _deep())
+		+ lerpf(0.0, 0.18, _mastery())
+		+ lerpf(0.0, 0.06, _ultra()),
+		0.0, 0.70)
 
 # The meanest fitting piece: the more cells it has and the FEWER places it fits, the
 # more it crowds the board and strands gaps. Small random jitter keeps it from handing
@@ -531,7 +556,10 @@ func _wants_clear() -> bool:
 	# difficulty, then keeps growing into the deep game so the board stays full and
 	# the pressure is real at high scores.
 	var drought : int = int(round(
-		lerpf(float(CLEAR_DROUGHT), 40.0, _difficulty()) + lerpf(0.0, 18.0, _deep())))
+		lerpf(float(CLEAR_DROUGHT), 40.0, _difficulty())
+		+ lerpf(0.0, 18.0, _deep())
+		+ lerpf(0.0, 25.0, _mastery())
+		+ lerpf(0.0, 15.0, _ultra())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
@@ -864,6 +892,25 @@ func _restore_state() -> void:
 	pieces = GameState.save_pieces.duplicate(true)
 	placed = GameState.save_placed.duplicate()
 
+	# After an ad revive: row-clears alone don't help a tall vertical piece
+	# (e.g. 5-vertical needs 5 stacked empty cells in one column). If the
+	# restored pieces still can't be placed, clear columns + more rows until
+	# something fits, so the player is never stuck after watching an ad.
+	if GameState.continue_mode == "ad":
+		var safety := 0
+		while not grid.can_any_fit(_shapes_array(), placed) and safety < 6:
+			if safety % 2 == 0:
+				_clear_topmost_cols(2)
+			else:
+				_clear_topmost_rows(2)
+			safety += 1
+		# Last-ditch wipe of the top half so SOMETHING fits — should never
+		# trigger in practice but guarantees no soft-lock after an ad.
+		if not grid.can_any_fit(_shapes_array(), placed):
+			for r in range(int(GRID_ROWS / 2)):
+				for c in GRID_COLS:
+					grid.cells[r][c] = null
+
 	disp_score = float(score)   # show restored score instantly, no count-up
 	_set_score_text(score)
 	_update_combo_label()
@@ -871,6 +918,9 @@ func _restore_state() -> void:
 	queue_redraw()
 
 func _help_player_continue() -> void:
+	_clear_topmost_rows(2)
+
+func _clear_topmost_rows(n: int) -> void:
 	var row_fills: Array = []
 	for r in GRID_ROWS:
 		var count := 0
@@ -878,10 +928,24 @@ func _help_player_continue() -> void:
 			if grid.cells[r][c] != null: count += 1
 		row_fills.append({"r": r, "count": count})
 	row_fills.sort_custom(func(a, b): return a["count"] > b["count"])
-	for i in min(2, row_fills.size()):
+	for i in min(n, row_fills.size()):
 		if row_fills[i]["count"] == 0: break
 		var r : int = row_fills[i]["r"]
 		for c in GRID_COLS:
+			grid.cells[r][c] = null
+
+func _clear_topmost_cols(n: int) -> void:
+	var col_fills: Array = []
+	for c in GRID_COLS:
+		var count := 0
+		for r in GRID_ROWS:
+			if grid.cells[r][c] != null: count += 1
+		col_fills.append({"c": c, "count": count})
+	col_fills.sort_custom(func(a, b): return a["count"] > b["count"])
+	for i in min(n, col_fills.size()):
+		if col_fills[i]["count"] == 0: break
+		var c : int = col_fills[i]["c"]
+		for r in GRID_ROWS:
 			grid.cells[r][c] = null
 
 # ── Input ─────────────────────────────────────────────────────────────────────
@@ -1052,12 +1116,15 @@ func _fire_power() -> void:
 	Sfx.play_tick()
 	if meter >= METER_FULL:
 		meter = 0.0
+		_last_power = 3
 		_power_gravity()
 	elif meter >= METER_LASER:
 		meter = 0.0          # double bomb spends the whole meter
+		_last_power = 2
 		_power_twin_bomb()
 	elif meter >= METER_BOMB:
 		meter -= METER_BOMB
+		_last_power = 1
 		_power_bomb()
 	# Count the ability use → can pop the Powerhouse achievement mid-run
 	GameState.add_power_used()
@@ -2902,9 +2969,17 @@ func _resolve_after_power() -> void:
 			rescue_active = false
 			Sfx.play_best()
 			_buzz(30)
+		_last_power = 0
 		return
 	rescue_active = false
-	_spawn_pieces()
+	# Only the ULT guarantees survival — that's the "spent the entire meter" promise.
+	# A bomb / twin-bomb that didn't open enough space is a real loss.
+	var was_ult := _last_power == 3
+	_last_power = 0
+	if was_ult:
+		_spawn_pieces()
+	else:
+		_game_over()
 
 func _game_over() -> void:
 	rescue_active = false
