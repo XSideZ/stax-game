@@ -26,11 +26,20 @@ all of them plus the launch-readiness backlog items he greenlit. Details below.
   Fix: refresh unconditionally when `restored=true`, defer through the
   close-tween if the panel happens to be open.
 - **Panel-wide drag-scrolling**: leaderboard / achievements / biomes were
-  previously only scrollable by dragging the actual rows. Promoted each panel's
-  `ScrollContainer` to a member var and connected a `gui_input` handler on the
-  panel itself (`_attach_drag_scroll(panel, scroll)`) that forwards drag deltas
-  to `scroll_vertical`. Bare button taps still work because buttons capture
-  input first.
+  previously only scrollable by dragging in the gaps between rows — touching a
+  leaderboard name / biome card / achievement card just registered a tap and
+  refused to scroll because those controls have `mouse_filter=STOP` and consume
+  `gui_input`. Fix lives in `MainMenu._input` (runs BEFORE the GUI input layer,
+  so we get every touch first regardless of which child captured it). Promoted
+  each panel's `ScrollContainer` to a member var (`lb_scroll` / `ach_scroll` /
+  `biome_scroll`), `_active_scrollable_panel()` picks the visible one, and
+  `_input` forwards drag deltas to `scroll_vertical` while accumulating
+  `_drag_distance`. On release, if `_drag_distance > DRAG_TAP_SUPPRESS_PX (12)`
+  it `set_input_as_handled()` so the underlying card's tap action doesn't also
+  fire (otherwise dragging down a leaderboard row would also "select" it). The
+  earlier `_attach_drag_scroll(panel, scroll)` stub is now a no-op, kept only
+  so existing call sites don't error; remove the stub + the calls if you
+  prefer a cleaner tree.
 
 ## ⚠️ Ad-serving regression we found at the very end of the session
 Jay reported ads broken on BOTH iPhone and iPad after the iPad UI overhaul
