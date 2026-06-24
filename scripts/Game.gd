@@ -500,26 +500,39 @@ func _deep() -> float:
 # from there. These two additional ramps keep climbing through the high-score range.
 # Both clamp to 0 below their start so anything under 100k is UNTOUCHED.
 #   MASTERY: intense band 100k → 500k  (the felt-difficulty climb)
-#   ULTRA:   gradual long tail 500k → 10M (smooth continuation, no hard wall)
+#   ULTRA:   LOGARITHMIC long tail 500k → 100M. A log scale means every 10x of score
+#            (1M → 10M → 100M) adds an equal step of pressure, so the run keeps getting
+#            meaner across the WHOLE high-score range instead of flat-lining at 10M like
+#            the old linear ramp. Paired with the raised _hard_bias cap below, the board
+#            saturates faster than you can clear it: past ~10M survival is a losing battle
+#            and by 100M (the worst-case ceiling) it's a wall — no one runs forever.
 const MASTERY_START := 100000.0
 const MASTERY_LEN   := 400000.0
-const ULTRA_START   := 500000.0
-const ULTRA_LEN     := 9500000.0
+const ULTRA_START   := 500000.0      # log ramp begins here (sub-500k game is untouched)
+const ULTRA_FULL    := 100000000.0   # 100M = fully maxed
 func _mastery() -> float:
 	return clampf((float(score) - MASTERY_START) / MASTERY_LEN, 0.0, 1.0)
 func _ultra() -> float:
-	return clampf((float(score) - ULTRA_START) / ULTRA_LEN, 0.0, 1.0)
+	if float(score) <= ULTRA_START:
+		return 0.0
+	# log() is natural log; ratio of logs gives equal pressure per order of magnitude.
+	var lo := log(ULTRA_START)
+	var hi := log(ULTRA_FULL)
+	return clampf((log(float(score)) - lo) / (hi - lo), 0.0, 1.0)
 
 # How often the spawner deliberately hands a crowding, hard-to-place piece instead of
-# a helpful one. Climbs with all four ramps so a long high-score run keeps getting
-# meaner; capped at 0.70 so there's always breathing room (and the rescue power).
+# a helpful one. Climbs with all four ramps. ULTRA now dominates the high-score range and
+# the cap is raised to 0.95, so deep runs converge toward almost-always handing the
+# meanest fitting piece — the board fills faster than it can be cleared and the run ends.
+# Reference points: ~500k → 0.64, 1M → ~0.68, 10M → ~0.82, 100M → 0.95 (a near-wall).
+# The 0.05 remainder + rescue power keep it from feeling FROZEN, not from ending the run.
 func _hard_bias() -> float:
 	return clampf(
 		lerpf(0.0, 0.34, _difficulty())
 		+ lerpf(0.0, 0.12, _deep())
 		+ lerpf(0.0, 0.18, _mastery())
-		+ lerpf(0.0, 0.06, _ultra()),
-		0.0, 0.70)
+		+ lerpf(0.0, 0.31, _ultra()),
+		0.0, 0.95)
 
 # The meanest fitting piece: the more cells it has and the FEWER places it fits, the
 # more it crowds the board and strands gaps. Small random jitter keeps it from handing
@@ -555,11 +568,14 @@ func _wants_clear() -> bool:
 	# Board-clear bailouts get rarer as the run gets harder: drought grows with
 	# difficulty, then keeps growing into the deep game so the board stays full and
 	# the pressure is real at high scores.
+	# ULTRA term is large so board-clear bailouts essentially STOP at the top end: the
+	# board stays saturated and there's no draining your way out of a deep run.
+	# ~500k → 83 sets, 1M → ~99, 10M → ~151, 100M → ~203 between forced drains.
 	var drought : int = int(round(
 		lerpf(float(CLEAR_DROUGHT), 40.0, _difficulty())
 		+ lerpf(0.0, 18.0, _deep())
 		+ lerpf(0.0, 25.0, _mastery())
-		+ lerpf(0.0, 15.0, _ultra())))
+		+ lerpf(0.0, 120.0, _ultra())))
 	return sets_given < EARLY_CLEAR_SETS or sets_since_clear >= drought
 
 # Fraction of the board currently filled (0..1).
