@@ -46,17 +46,16 @@
 		</dict>
 	</array>
 
-	<!-- AdMob (a third-party SDK linked into this app) uses IDFA for personalised
-		 ads + measurement when the user grants AppTrackingTransparency, which per
-		 Apple's definition counts as the app "engaging in tracking". The actual
-		 NSPrivacyTrackingDomains list lives in AdMob's own embedded PrivacyInfo
-		 (GoogleMobileAds.xcframework) — Apple aggregates the manifests; we don't
-		 add to the domain list here. We never share data with other companies
-		 ourselves; the Supabase leaderboard fields are app-functionality only. -->
+	<!-- Our app code does not engage in tracking. AdMob (an embedded third-party
+		 SDK) declares its own tracking + domains in its bundled PrivacyInfo inside
+		 GoogleMobileAds.xcframework, and Apple aggregates manifests across the
+		 app + frameworks — so setting `false` here is the right declaration for
+		 the app-level manifest. (Setting it `true` with an empty
+		 NSPrivacyTrackingDomains array fails App Store validation with
+		 ITMS-91064; Apple's under-documented rule is that `true` here requires
+		 the domains list to be non-empty.) -->
 	<key>NSPrivacyTracking</key>
-	<true/>
-	<key>NSPrivacyTrackingDomains</key>
-	<array/>
+	<false/>
 
 	<!-- Data this game itself collects + sends off-device (excluding AdMob, which has
 		 its own manifest). The leaderboard / cloud-backup flow sends a device-generated
