@@ -116,6 +116,10 @@ func _build_menu() -> void:
 	_build_leaderboard_panel()
 	_build_stats_panel()
 	_maybe_show_review()
+	# New biome unlocks are toasted on the menu (not GameOver) so the celebration
+	# lands wherever the player ends up — coming back from a run that unlocked a
+	# skin, or returning to the menu after rating the game 5 stars in-app.
+	_drain_skin_toasts()
 	# Silently refresh the player's global rank so the profile pin is up to date
 	if Net.is_configured():
 		Net.fetch_global(50)
@@ -503,6 +507,9 @@ func _open_store_review() -> void:
 		OS.shell_open(url)
 
 func _close_review() -> void:
+	# After the prompt slides away, pick up STARDOM's toast (or any other skin
+	# unlock that landed during this menu session).
+	_drain_skin_toasts(0.35)
 	if review_overlay == null or not is_instance_valid(review_overlay):
 		return
 	var ov := review_overlay
@@ -510,6 +517,81 @@ func _close_review() -> void:
 	var t := create_tween()
 	t.tween_property(ov, "modulate:a", 0.0, 0.2)
 	t.tween_callback(ov.queue_free)
+
+# ── Skin-unlock celebration on the menu ─────────────────────────────────────
+# Drains every "skin_<idx>" entry from GameState.pending_toasts and plays a
+# stacked sequence of sliding "NEW BIOME UNLOCKED" cards. Achievement entries
+# in pending_toasts are left alone (GameOver handles those). `start_delay` is
+# the wait before the first card slides in — used so the toast can wait for
+# the review prompt to finish fading out.
+func _drain_skin_toasts(start_delay: float = 0.6) -> void:
+	var skin_keys : Array = []
+	var still : Array = []
+	for k in GameState.pending_toasts:
+		if String(k).begins_with("skin_"):
+			skin_keys.append(k)
+		else:
+			still.append(k)
+	GameState.pending_toasts = still
+	for i in skin_keys.size():
+		var key : String = skin_keys[i]
+		var idx := int(String(key).substr(5))
+		# Stagger each toast so they don't pile on top of each other
+		_show_skin_toast(idx, start_delay + float(i) * 3.1)
+
+func _show_skin_toast(skin_idx: int, delay: float) -> void:
+	var info : Dictionary = GameState.ach_info("skin_%d" % skin_idx)
+	if info.is_empty():
+		return
+	var is_rated : bool = (skin_idx == GameState.RATED_SKIN)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.11, 0.20, 0.97)
+	sb.set_corner_radius_all(16)
+	sb.border_width_bottom = 5
+	# Gold rim for STARDOM (matches the skin); cool blue rim for the rest
+	sb.border_color = Color(1.00, 0.86, 0.36) if is_rated else Color(0.40, 0.85, 1.0)
+	sb.content_margin_left = 18; sb.content_margin_right = 18
+	sb.content_margin_top = 10;  sb.content_margin_bottom = 12
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.custom_minimum_size = Vector2(330, 0)
+	panel.position = Vector2(42, -110)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(panel)
+	# Keep the toast on top of menu buttons / panels
+	ui.move_child(panel, ui.get_child_count() - 1)
+
+	var vbox := VBoxContainer.new()
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(vbox)
+	var header := Label.new()
+	header.text = "NEW MYTHIC BIOME UNLOCKED" if is_rated else "NEW BIOME UNLOCKED"
+	header.add_theme_font_size_override("font_size", 11)
+	header.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(header)
+	var title := Label.new()
+	title.text = info["name"]
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45) if is_rated else Color(0.55, 0.90, 1.0))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+	var desc := Label.new()
+	desc.text = ("Thanks for the 5-star review! ★" if is_rated else "Check the BIOMES gallery to wear it.")
+	desc.add_theme_font_size_override("font_size", 13)
+	desc.add_theme_color_override("font_color", Color(1, 1, 1, 0.70))
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.custom_minimum_size = Vector2(290, 0)
+	vbox.add_child(desc)
+
+	var t := create_tween()
+	t.tween_interval(delay)
+	t.tween_callback(Sfx.play_best)
+	t.tween_property(panel, "position:y", 26.0, 0.40).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_interval(2.4)
+	t.tween_property(panel, "position:y", -130.0, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	t.tween_callback(panel.queue_free)
 
 # ── Player profile card: name + level chip + XP bar + best, tap for stats ───
 var profile_name : Label

@@ -159,11 +159,16 @@ func check_skin_unlocks() -> Array:
 	return fresh
 
 # Called from the review prompt when the player taps 5 stars. Unlocks STARDOM and
-# queues the toast — the next game-over (or biomes-gallery refresh) reveals it.
+# queues the "NEW BIOME UNLOCKED" toast — MainMenu drains skin-toast entries from
+# pending_toasts on _ready (and right after the review prompt closes), so the
+# player sees the celebration the moment they're back on the menu.
 func unlock_rated_skin() -> void:
 	if rated_5_stars:
 		return
 	rated_5_stars = true
+	if not skins_seen.has(RATED_SKIN):
+		skins_seen.append(RATED_SKIN)
+	pending_toasts.append("skin_%d" % RATED_SKIN)
 	_save()
 
 # Skins available for the AUTO rotation = the player's unlocked set

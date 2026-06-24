@@ -92,10 +92,18 @@ func _ready() -> void:
 	_build_leaderboard()
 	Sfx.update_music()
 
-	# Achievements earned this run (games-played milestones) toast in
+	# Achievements earned this run (games-played milestones) toast in here. Skin
+	# unlocks are deferred to MainMenu (so the celebration lands on the menu the
+	# player returns to, with the gallery one tap away), so leave "skin_*" keys
+	# in pending_toasts for MainMenu._drain_skin_toasts to pick up.
+	var still_pending : Array = []
 	for i in GameState.pending_toasts.size():
-		_show_achievement_toast(GameState.pending_toasts[i], 0.9 + float(i) * 1.1)
-	GameState.pending_toasts = []
+		var key : String = GameState.pending_toasts[i]
+		if key.begins_with("skin_"):
+			still_pending.append(key)
+			continue
+		_show_achievement_toast(key, 0.9 + float(i) * 1.1)
+	GameState.pending_toasts = still_pending
 
 	# Ad offer: first death → revive; once the revive's been spent, the next
 	# death offers a single "double your XP" ad instead. Never two on one screen.
