@@ -42,7 +42,7 @@ const SKIN_NAMES : Array = ["PASTEL", "NEON", "CIRCUIT", "BRICK", "CRYSTAL",
 	"CANDY", "FROST", "GRASS", "WATER", "LAVA", "WOOD", "GALAXY",
 	"HONEY", "RETRO", "BUBBLE", "STORM", "SAKURA", "METALS", "SLIME", "DISCO",
 	"AURORA", "PLASMA", "OPAL", "MATRIX", "HOLOGRAM",
-	"PRISM", "STAINED", "SYNTHWAVE", "AUTUMN", "WARP"]
+	"PRISM", "STAINED", "SYNTHWAVE", "AUTUMN", "WARP", "MEOW", "STARDOM"]
 
 var orbs    : Array = []
 var fallers : Array = []
@@ -348,7 +348,7 @@ func _show_review_prompt() -> void:
 	vbox.add_child(title)
 
 	var body := Label.new()
-	body.text = "Leaving a review really helps a small game like ours grow. Hope you're having fun!"
+	body.text = "Leaving a review really helps a small game like ours grow.  ★ Rate 5 stars and you'll unlock a special MYTHIC biome — STARDOM ★"
 	body.add_theme_font_size_override("font_size", 16)
 	body.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -477,6 +477,12 @@ func _select_star(n: int) -> void:
 
 func _on_review_star(n: int) -> void:
 	GameState.finish_review()       # asked + answered → never auto-ask again
+	# 5-star reward: STARDOM (index 31). We grant it on the in-app tap rather
+	# than verifying the App Store write-review went through — Apple gives us
+	# no signal of that, and gating the unlock on an unverifiable step would
+	# feel broken to honest 5-star players.
+	if n >= 5:
+		GameState.unlock_rated_skin()
 	if n >= REVIEW_STORE_THRESHOLD:
 		_open_store_review()
 	_close_review()
@@ -1148,6 +1154,9 @@ const BIOME_TIERS : Array = [
 	{"name": "RARE",      "color": Color(0.35, 0.66, 0.98), "skins": [5, 6, 7, 8, 10, 13, 18]},
 	{"name": "EPIC",      "color": Color(0.74, 0.46, 0.99), "skins": [9, 12, 14, 28, 22, 19, 27, 17, 26, 29]},
 	{"name": "LEGENDARY", "color": Color(0.98, 0.79, 0.30), "skins": [16, 20, 11, 25, 24, 23, 21, 15]},
+	# Reward tier — unlocked by 5-star-rating the game. One-off, sits at the end
+	# of the gallery so the unlock condition reads as obviously special.
+	{"name": "MYTHIC",    "color": Color(1.00, 0.92, 0.45), "skins": [31]},
 ]
 
 func _build_biomes_panel() -> void:

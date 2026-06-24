@@ -2141,6 +2141,32 @@ func _draw_bg_pattern() -> void:
 				draw_polygon(PackedVector2Array([Vector2(-7, 0), Vector2(-15, -6), Vector2(-15, 6)]),
 					PackedColorArray([fc]))
 				draw_set_transform(Vector2.ZERO)
+		31:  # Stardom — drifting gold stars + a soft top spotlight
+			var st := Time.get_ticks_msec() * 0.001
+			# Warm spotlight bleed from the top edge
+			draw_circle(Vector2(207, -40), 240.0, Color(1.0, 0.85, 0.30, 0.06))
+			draw_circle(Vector2(207, -40), 150.0, Color(1.0, 0.92, 0.50, 0.05))
+			# 12 little 5-point stars drifting upward, gentle spin, varied sizes
+			for i in 12:
+				var sx2 : float = fmod(float(i * 113 + 19) * 31.7, 414.0)
+				var sy2 : float = fmod(float(i * 71 + 23) * 27.9 - st * (12.0 + float(i % 4) * 4.0), 940.0) - 20.0
+				if sy2 < -20.0: sy2 += 940.0
+				var sz : float = 5.0 + float(i % 3) * 3.0
+				var srot := st * 0.3 + float(i) * 0.7
+				var glow : Color = Color(1.0, 0.85, 0.30, 0.05 + float(i % 2) * 0.04)
+				var face : Color = Color(1.0, 0.92, 0.50, 0.18 + float(i % 3) * 0.05)
+				draw_set_transform(Vector2(sx2, sy2), srot)
+				# Faint glow halo behind the star
+				draw_circle(Vector2.ZERO, sz * 1.7, glow)
+				# 5-point star = 10 fan triangles from the origin
+				var pts : Array = []
+				for k in 10:
+					var ang := -PI * 0.5 + float(k) * PI / 5.0
+					var rd : float = sz if (k % 2 == 0) else sz * 0.40
+					pts.append(Vector2(cos(ang), sin(ang)) * rd)
+				for k in 10:
+					draw_polygon(PackedVector2Array([Vector2.ZERO, pts[k], pts[(k + 1) % 10]]), PackedColorArray([face]))
+				draw_set_transform(Vector2.ZERO)
 
 func _draw_slot(i: int) -> void:
 	var sx   : float = i * SLOT_W

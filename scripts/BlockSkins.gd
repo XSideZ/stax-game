@@ -264,6 +264,7 @@ static func _dispatch(ci: CanvasItem, style: int, r: Rect2, col: Color, seed_v: 
 		28: _autumn(ci, r, col, s, rad, seed_v, pr)
 		29: _warp(ci, r, col, s, rad, seed_v)
 		30: _cat(ci, r, col, s, rad, seed_v)
+		31: _stardom(ci, r, col, s, rad, seed_v)
 
 # ── Polygon clipping (Sutherland–Hodgman vs axis-aligned rect) ────────────────
 # Lets cross-block animations (sakura petals, metal gleams) be drawn by every
@@ -1234,6 +1235,58 @@ static func _cat(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, see
 	for wy in [ny - s * 0.02, ny + s * 0.05]:
 		ci.draw_line(Vector2(c.x - s * 0.20, wy), Vector2(c.x - s * 0.42, wy - s * 0.03), dark, 1.2)
 		ci.draw_line(Vector2(c.x + s * 0.20, wy), Vector2(c.x + s * 0.42, wy - s * 0.03), dark, 1.2)
+
+# ── 31 STARDOM (5-star review reward — gold plaque with embossed star) ───────
+# Cheap renderer per the perf rule: rr_grad base + gold rim + a 5-point star
+# built as 10 convex fan triangles (no clip_poly_to_rect, no per-cell board
+# loop). The star colour leans on the piece's own hue lerped into deep gold so
+# different piece colours still read as distinct without losing the "premium"
+# look.
+static func _stardom(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, _seed_v: int = 0) -> void:
+	var gold        : Color = Color(0.95, 0.78, 0.22)
+	var gold_bright : Color = Color(1.00, 0.92, 0.45)
+	var gold_deep   : Color = Color(0.55, 0.34, 0.05)
+	# Tint towards the piece colour just enough that the six game colours still
+	# stay tellable apart on the board
+	var plaque_top := gold_bright.lerp(col, 0.18)
+	var plaque_bot := gold.lerp(col.darkened(0.30), 0.18)
+
+	# Shadow + plaque base + double-rim (a thin dark ring inside a bright rim
+	# gives the embossed-jewellery feel without an extra rrect fill)
+	ci.draw_rect(Rect2(r.position + Vector2(s * 0.04, s * 0.07), r.size), Color(0, 0, 0, 0.32), true)
+	rr_grad(ci, r, rad, plaque_top, plaque_bot)
+	rr_outline(ci, r, rad, gold_deep, 1.5)
+	rr_outline(ci, r.grow(-s * 0.04), rad * 0.85, Color(1, 1, 1, 0.22), 1.0)
+
+	# Central 5-pointed star drawn as 10 fan triangles from the centre. Outer
+	# radius is sized so the star fits inside the inset rim with a little
+	# breathing room (~64% of half-cell).
+	var c := r.get_center()
+	var r_out := s * 0.30
+	var r_in  := s * 0.13
+	var pts : Array = []
+	for i in 10:
+		var ang : float = -PI * 0.5 + float(i) * PI / 5.0
+		var rd  : float = r_out if (i % 2 == 0) else r_in
+		pts.append(c + Vector2(cos(ang), sin(ang)) * rd)
+	var star_top := col.lerp(Color(1.0, 0.96, 0.60), 0.55)
+	var star_bot := col.lerp(Color(0.95, 0.60, 0.10), 0.40)
+	for i in 10:
+		var p1 : Vector2 = pts[i]
+		var p2 : Vector2 = pts[(i + 1) % 10]
+		# Top half of the star = brighter; bottom half = deeper, gives a lit-
+		# from-above shine without needing a gradient polygon
+		var face : Color = star_top if p1.y < c.y or p2.y < c.y else star_bot
+		var tri := PackedVector2Array([c, p1, p2])
+		draw_poly_safe(ci, tri, face, true)
+	# Outline the star tips with a thin dark line for definition
+	var outline := PackedVector2Array()
+	for p in pts:
+		outline.append(p)
+	outline.append(pts[0])
+	ci.draw_polyline(outline, gold_deep, 1.0)
+	# A single bright glint on the upper-left tip — sells the gold finish
+	ci.draw_circle(c + Vector2(-s * 0.06, -s * 0.22), s * 0.025, Color(1, 1, 1, 0.85))
 
 # ── 11 GALAXY (animated) ──────────────────────────────────────────────────────
 static func _galaxy(ci: CanvasItem, r: Rect2, col: Color, s: float, rad: float, seed_v: int) -> void:

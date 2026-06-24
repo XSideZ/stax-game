@@ -35,10 +35,16 @@ var skin_locked : bool = false
 var theme_bag : Array = []
 
 # ── Secret cat skin (easter egg: tap S-T-A-X on the title in order) ───────────
-# CAT is the last THEMES entry; the random theme rotation only uses 0..CAT_SKIN-1
-# so it never appears by chance. cat_mode forces it on everywhere, and persists.
+# CAT is at index 30; the random theme rotation only uses 0..CAT_SKIN-1 so it
+# never appears by chance. cat_mode forces it on everywhere, and persists.
 const CAT_SKIN := 30
 var cat_mode : bool = false
+
+# STARDOM (index 31) is the "rate-the-game" reward skin: unlocked when the player
+# taps 5 stars in the in-app review prompt. Like CAT, it's excluded from the AUTO
+# rotation pool (the player picks it manually from the Biomes gallery once unlocked).
+const RATED_SKIN := 31
+var rated_5_stars : bool = false
 
 # Effective skin index, honoured by Game/MainMenu/GameOver
 func active_skin(theme_i: int) -> int:
@@ -75,6 +81,8 @@ func skin_unlock_hint(idx: int) -> String:
 	var rule : String = SKIN_UNLOCK.get(idx, "start")
 	if rule == "start":
 		return ""
+	if rule == "rated":
+		return "Rate STAX 5 stars!"
 	if rule.begins_with("L"):
 		return "Reach level " + rule.substr(1)
 	var g := ach_group(rule)
@@ -101,14 +109,22 @@ const SKIN_UNLOCK : Dictionary = {
 	# Tier 3 — top levels + hardest mission completions
 	16: "L70",    20: "L80",    11: "L90",
 	25: "score",  24: "marathon", 23: "boards", 21: "multi",  15: "powers",
+	# Reward — rate the game 5 stars in the review prompt
+	31: "rated",
 }
 
 func is_skin_unlocked(idx: int) -> bool:
-	if idx >= CAT_SKIN:
-		return true
+	if idx == CAT_SKIN:
+		return true   # secret skin: always "unlocked" in code; only shown via cat_mode
+	if idx == RATED_SKIN:
+		return rated_5_stars
+	if idx >= THEMES.size():
+		return false
 	var rule : String = SKIN_UNLOCK.get(idx, "start")
 	if rule == "start":
 		return true
+	if rule == "rated":
+		return rated_5_stars
 	if rule.begins_with("L"):
 		return get_level() >= int(rule.substr(1))
 	# Achievement skin: requires the FULL quest (its last tier) complete — a real
@@ -123,19 +139,32 @@ func count_unlocked_skins() -> int:
 	for i in CAT_SKIN:
 		if is_skin_unlocked(i):
 			n += 1
+	# RATED is outside the natural progression — exclude from the Collector
+	# achievement's count so 5-star rating doesn't artificially nudge the tier.
 	return n
 
 # Skins newly unlocked since last check — appends "skin_<idx>" toast keys to
-# pending_toasts and remembers them so each only announces once.
+# pending_toasts and remembers them so each only announces once. Iterates the
+# full themes array (minus CAT) so STARDOM toasts on its first reveal too.
 func check_skin_unlocks() -> Array:
 	var fresh : Array = []
-	for i in CAT_SKIN:
+	for i in THEMES.size():
+		if i == CAT_SKIN:
+			continue
 		if is_skin_unlocked(i) and not skins_seen.has(i):
 			skins_seen.append(i)
 			fresh.append("skin_%d" % i)
 	if not fresh.is_empty():
 		_save()
 	return fresh
+
+# Called from the review prompt when the player taps 5 stars. Unlocks STARDOM and
+# queues the toast — the next game-over (or biomes-gallery refresh) reveals it.
+func unlock_rated_skin() -> void:
+	if rated_5_stars:
+		return
+	rated_5_stars = true
+	_save()
 
 # Skins available for the AUTO rotation = the player's unlocked set
 func unlocked_skins() -> Array:
@@ -528,6 +557,8 @@ const THEMES: Array = [
 	{"bg": Color(0.02, 0.03, 0.09), "orb": Color(0.55, 0.70, 1.00, 0.08), "accent": Color(0.70, 0.85, 1.00), "name": "HYPERSPACE"},
 	# index 30 = secret CAT skin (never in random rotation; easter-egg only)
 	{"bg": Color(0.20, 0.14, 0.24), "orb": Color(1.00, 0.80, 0.90, 0.09), "accent": Color(1.00, 0.78, 0.88), "name": "MEOW TOWN"},
+	# index 31 = STARDOM (rate-the-game 5-star reward; gold + deep-wine luxe)
+	{"bg": Color(0.18, 0.04, 0.10), "orb": Color(1.00, 0.86, 0.36, 0.10), "accent": Color(1.00, 0.92, 0.45), "name": "STARDOM"},
 ]
 
 func _ready() -> void:
@@ -716,6 +747,7 @@ func _reset_progress() -> void:
 	tutorial_done = false
 	review_state = 0
 	review_snooze_games = 0
+	rated_5_stars = false
 	my_global_rank = 0
 
 # ── Settings / meta persistence ───────────────────────────────────────────────
@@ -760,6 +792,7 @@ func _save() -> void:
 	f.store_var(my_global_rank)
 	f.store_var(auth_refresh_token)
 	f.store_var(auth_provider)
+	f.store_var(rated_5_stars)
 	var write_ok := f.get_error() == OK
 	f.close()
 	if not write_ok:   # write failed partway (disk full etc) — leave the live file untouched
@@ -864,4 +897,5 @@ func _read_save_fields(path: String) -> int:
 	if n > 28: my_global_rank      = vals[28]
 	if n > 29: auth_refresh_token  = vals[29]
 	if n > 30: auth_provider       = vals[30]
+	if n > 31: rated_5_stars       = vals[31]
 	return 1 if n > _EPOCH_VAL_IDX else 0
