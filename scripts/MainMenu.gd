@@ -1341,6 +1341,15 @@ func _make_biome_card(idx: int, current: int) -> PanelContainer:
 				Sfx.play_click()
 				_refresh_biome_mode()
 				_populate_biomes()
+			elif tap_idx == GameState.RATED_SKIN:
+				# Tapping the locked STARDOM tile force-opens the in-app review
+				# prompt — that's the ONLY path that can detect a 5-star rating
+				# and trigger the unlock (Apple gives no signal for taps on the
+				# external App Store listing). Bypasses the snooze / "don't ask
+				# again" gating, so the player can always come back here to claim.
+				Sfx.play_click()
+				biome_box.visible = false
+				_show_review_prompt()
 			else:
 				Sfx.play_tick())
 	return card

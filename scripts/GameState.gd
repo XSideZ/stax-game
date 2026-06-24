@@ -82,7 +82,7 @@ func skin_unlock_hint(idx: int) -> String:
 	if rule == "start":
 		return ""
 	if rule == "rated":
-		return "Rate STAX 5 stars!"
+		return "Tap to rate STAX 5 stars!"
 	if rule.begins_with("L"):
 		return "Reach level " + rule.substr(1)
 	var g := ach_group(rule)
