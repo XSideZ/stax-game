@@ -2302,11 +2302,40 @@ func _haptics_text() -> String:
 	return "HAPTICS: ON" if GameState.haptics_on else "HAPTICS: OFF"
 
 # Watch a rewarded ad, then open the name editor. Repeatable — each rename = one ad.
+# If AdMob hasn't preloaded a rewarded ad yet (iPad fill can be slow), the button
+# enters "AD LOADING…" + polls every second instead of flashing "NO AD AVAILABLE"
+# and giving up — players were tapping this in TestFlight on iPad and getting no
+# response other than a brief error flash even though an ad was about to load.
 func _on_change_name_pressed(btn: Button) -> void:
 	Sfx.play_click()
-	if not Ads.can_offer_rewarded():
-		_flash_btn(btn, "NO AD AVAILABLE", "CHANGE NAME")
+	if Ads.can_offer_rewarded():
+		_show_change_name_ad(btn)
 		return
+	btn.text = "AD LOADING…"
+	btn.disabled = true
+	var poll := Timer.new()
+	poll.wait_time = 1.0
+	poll.one_shot  = false
+	add_child(poll)
+	poll.timeout.connect(func():
+		if not is_instance_valid(btn):
+			poll.queue_free()
+			return
+		if Ads.can_offer_rewarded():
+			poll.queue_free()
+			btn.text = "CHANGE NAME"
+			_show_change_name_ad(btn))
+	poll.start()
+	get_tree().create_timer(15.0).timeout.connect(func():
+		if not is_instance_valid(btn):
+			return
+		if btn.disabled and btn.text == "AD LOADING…":
+			btn.disabled = false
+			if is_instance_valid(poll):
+				poll.queue_free()
+			_flash_btn(btn, "NO AD AVAILABLE", "CHANGE NAME"))
+
+func _show_change_name_ad(btn: Button) -> void:
 	btn.disabled = true
 	Ads.show_rewarded(func(earned: bool):
 		btn.disabled = false
