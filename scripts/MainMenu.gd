@@ -33,6 +33,12 @@ const FALL_COUNT := 12
 const IOS_APP_ID             := "6778501101"
 const ANDROID_PACKAGE        := ""
 const REVIEW_STORE_THRESHOLD := 4
+
+# ⚠️ AI AUTOPLAY DEV BUTTON — FLIP TO false BEFORE PUSHING TO THE APP STORE.
+# When true, Settings shows an "AI AUTOPLAY (DEV)" button that drops the player
+# into a self-playing run (see scripts/AutoPlay.gd). Fine to leave on for
+# TestFlight / closed-beta builds, but real players should never see it.
+const SHOW_AUTOPLAY := true
 # Custom-drawn rating stars (cuter than a glyph + tap-to-fill interaction)
 const STAR_COUNT := 5
 const STAR_GAP   := 56.0
@@ -62,6 +68,19 @@ var _confirm_open := false       # a "new game?" dialog is open → don't stack 
 @onready var ui : CanvasLayer = $UI
 
 func _ready() -> void:
+	# Returning to the menu always exits the AI autoplay loop (the gear → MENU
+	# button is the player's escape hatch from a self-playing game).
+	GameState.autoplay_active = false
+	# Dev: `--autoplay` skips the menu and drops straight into a fresh run that
+	# AutoPlay.gd will drive (see Game._ready).
+	if "--autoplay" in OS.get_cmdline_args() or "--autoplay" in OS.get_cmdline_user_args():
+		GameState.autoplay_active = true
+		GameState.tutorial_active = false
+		GameState.has_save = false
+		GameState.clear_run()
+		# Give the autoload one frame to settle, then change scene
+		call_deferred("_autoplay_jump")
+		return
 	# Menu runs at 60fps — it's the screen the player actually looks at, and 30
 	# felt framey on the animated bg. (Game-over, which is transient, stays at 30.)
 	Engine.max_fps = 60
@@ -123,6 +142,9 @@ func _build_menu() -> void:
 	# Silently refresh the player's global rank so the profile pin is up to date
 	if Net.is_configured():
 		Net.fetch_global(50)
+
+func _autoplay_jump() -> void:
+	get_tree().change_scene_to_file("res://scenes/Game.tscn")
 
 func _make_faller(anywhere: bool) -> Dictionary:
 	return {
@@ -2377,6 +2399,23 @@ func _build_settings_panel() -> void:
 		settings_box.visible = false
 		_open_account())
 	vbox.add_child(account)
+
+	# Dev: AI AUTOPLAY toggle. Tap → kicks off a self-playing run; exit via the
+	# pause/gear → MENU button which lands back on this menu and clears the flag.
+	# Gated by SHOW_AUTOPLAY at the top of this file — flip false before the
+	# App Store push so the button doesn't ship to real players.
+	if SHOW_AUTOPLAY:
+		var autoplay_btn := _make_chunky_button("AI AUTOPLAY (DEV)", Color(0.60, 0.40, 0.85), 18)
+		autoplay_btn.custom_minimum_size = Vector2(0, 56)
+		autoplay_btn.pressed.connect(func():
+			Sfx.play_click()
+			settings_box.visible = false
+			GameState.autoplay_active = true
+			GameState.tutorial_active = false
+			GameState.has_save = false
+			GameState.clear_run()
+			get_tree().change_scene_to_file("res://scenes/Game.tscn"))
+		vbox.add_child(autoplay_btn)
 
 	var close := _make_chunky_button("CLOSE", Color(0.90, 0.30, 0.40), 20)
 	close.custom_minimum_size = Vector2(0, 56)

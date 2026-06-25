@@ -282,6 +282,13 @@ func _ready() -> void:
 	Sfx.update_music()
 	if GameState.tutorial_active:
 		_start_tutorial()
+	# Dev autoplay: triggered via the Settings → AI AUTOPLAY button OR a
+	# `-- --autoplay` launch flag.
+	if GameState.autoplay_active or "--autoplay" in OS.get_cmdline_args() or "--autoplay" in OS.get_cmdline_user_args():
+		GameState.autoplay_active = true
+		var ap_script : Script = load("res://scripts/AutoPlay.gd")
+		if ap_script != null:
+			add_child(ap_script.new())
 
 # ── Orbs ──────────────────────────────────────────────────────────────────────
 func _init_orbs() -> void:

@@ -46,6 +46,12 @@ var cat_mode : bool = false
 const RATED_SKIN := 31
 var rated_5_stars : bool = false
 
+# Dev-only AI autoplay toggle (NOT persisted — session-scoped, cleared every
+# time MainMenu._ready runs). Settings panel has an AI AUTOPLAY button that
+# flips this on and starts a run; Game._ready spawns AutoPlay.gd when it's on;
+# GameOver._ready auto-restarts when it's on; exiting to MainMenu turns it off.
+var autoplay_active : bool = false
+
 # Effective skin index, honoured by Game/MainMenu/GameOver
 func active_skin(theme_i: int) -> int:
 	return effective_skin(theme_i)

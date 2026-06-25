@@ -30,6 +30,14 @@ var _dx_claimed  : bool   = false
 func _ready() -> void:
 	# 60fps to match the menu and gameplay — the animated bg felt framey at 30.
 	Engine.max_fps = 60
+	# Dev autoplay: brief pause to glimpse the final score, then restart.
+	if GameState.autoplay_active or "--autoplay" in OS.get_cmdline_args() or "--autoplay" in OS.get_cmdline_user_args():
+		var t := create_tween()
+		t.tween_interval(1.0)
+		t.tween_callback(func():
+			GameState.has_save = false
+			GameState.clear_run()
+			get_tree().change_scene_to_file("res://scenes/Game.tscn"))
 	for _i in 8:
 		orbs.append({
 			"pos":    Vector2(randf() * 414.0, randf() * 896.0),
