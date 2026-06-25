@@ -2621,12 +2621,25 @@ func _on_auth_signed_in(restored: bool) -> void:
 	var t := create_tween()
 	t.tween_interval(1.4)
 	t.tween_callback(_close_account)
-	if restored and account_overlay != null and is_instance_valid(account_overlay):
-		# Only when the player restored from the OPEN account panel in-session — the menu
-		# was built at the OLD level so its locks are stale. On a SILENT boot-resume the
-		# menu is already built at the correct level, so rebuilding is pointless and would
-		# re-stack the buttons over the overlay panels (the behind-the-menu glitch).
-		t.tween_callback(_refresh_menu_buttons)
+	if restored:
+		# Cloud restore bumped player_xp / unlocks / lifetime stats. The menu was
+		# built BEFORE that landed, so the LEADERBOARD / BIOMES lock badges + the
+		# stats panel are stale. Refresh either via the close-then-refresh tween
+		# chain when the ACCOUNT panel is open, or immediately on silent
+		# boot-resume. (Previously this only refreshed when the panel was open,
+		# on the assumption local saves were always correct on boot — but a
+		# level-22 tester saw both gated buttons after a fresh TestFlight
+		# install: silent restore caught local state up from cloud, but no
+		# rebuild ever fired.)
+		if account_overlay != null and is_instance_valid(account_overlay):
+			t.tween_callback(_refresh_menu_buttons)
+		else:
+			_refresh_menu_buttons()
+		# Stats panel reads GameState fields when populated; if the player has
+		# it open during restore, repopulate so the numbers jump to the cloud
+		# values rather than showing the pre-restore local figures.
+		if is_instance_valid(stats_box) and stats_box.visible:
+			_populate_stats()
 
 func _on_auth_failed(reason: String) -> void:
 	if is_instance_valid(account_status):

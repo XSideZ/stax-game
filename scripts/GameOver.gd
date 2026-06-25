@@ -107,18 +107,46 @@ func _ready() -> void:
 
 	# Ad offer: first death → revive; once the revive's been spent, the next
 	# death offers a single "double your XP" ad instead. Never two on one screen.
-	if not Ads.can_offer_rewarded():
-		_hide_ad_button()
-	elif not GameState.revive_used:
+	# Only HIDE the button when there's no offer at all (revive already used
+	# AND no XP to double). If the offer applies but AdMob hasn't preloaded a
+	# rewarded ad yet (e.g. you just opened the app + died fast), we keep the
+	# button visible in a disabled "AD LOADING…" state and poll every 0.7s
+	# until a rewarded ad is ready — the old code hid it immediately on the
+	# first false from can_offer_rewarded() and never came back, which was
+	# the "I died and got no ad" bug.
+	if not GameState.revive_used:
 		ad_mode = "revive"
-		ad_button.text = "WATCH AD TO CONTINUE"
+		_arm_ad_button("WATCH AD TO CONTINUE")
 	elif GameState.last_xp_gain > 0:
 		ad_mode = "double_xp"
-		ad_button.text = "WATCH AD: 2× XP"
+		_arm_ad_button("WATCH AD: 2× XP")
 	else:
 		_hide_ad_button()   # revive used + nothing to double → no offer
 
 	# Interstitials disabled — rewarded ads only.
+
+func _arm_ad_button(offer_text: String) -> void:
+	if not is_instance_valid(ad_button):
+		return
+	if Ads.can_offer_rewarded():
+		ad_button.text = offer_text
+		ad_button.disabled = false
+		return
+	ad_button.text = "AD LOADING…"
+	ad_button.disabled = true
+	var poll := Timer.new()
+	poll.wait_time = 0.7
+	poll.one_shot  = false
+	add_child(poll)
+	poll.timeout.connect(func():
+		if not is_instance_valid(ad_button):
+			poll.queue_free()
+			return
+		if Ads.can_offer_rewarded():
+			ad_button.text = offer_text
+			ad_button.disabled = false
+			poll.queue_free())
+	poll.start()
 
 func _hide_ad_button() -> void:
 	ad_button.visible = false

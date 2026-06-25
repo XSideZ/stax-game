@@ -464,6 +464,12 @@ func finish_run(moves: int, final_score: int, run_lines: int = 0,
 	pending_toasts = check_unlocks()
 	pending_toasts.append_array(check_skin_unlocks())
 	_save()
+	# Push the freshly-updated profile up so the cloud always reflects the
+	# latest run. Without this, a signed-in player's cloud snapshot stayed
+	# frozen at sign-in time — restoring on another device showed stale
+	# stats / high score. Auth.push_progress is a no-op when not signed in.
+	if Auth.is_signed_in():
+		Auth.push_progress()
 
 # Watched the "double XP" rewarded ad on a terminal game over (revive already
 # spent). Adds the run's XP gain a second time so the payout is 2×. Returns the
@@ -632,6 +638,10 @@ func record_final_score(s: int) -> void:
 			scores.resize(MAX_SCORES)
 	_save()
 	_sync_online()   # push the new best to the online leaderboard
+	# Also push the full profile snapshot so best_score / scores / lifetime
+	# totals all show up next time the player restores on another device.
+	if Auth.is_signed_in():
+		Auth.push_progress()
 
 func set_sound(on: bool) -> void:
 	sound_on = on
